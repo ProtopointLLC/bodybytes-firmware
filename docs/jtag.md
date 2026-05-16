@@ -9,7 +9,7 @@
 | Crystal | 40 MHz external oscillator |
 | RAM | 256 MB DDR2 |
 | Boot flash | 64 MB SPI NOR (bootloader + OS) |
-| App storage | 128 GB NAND flash |
+| App storage | 128 GB eMMC NAND (Kingston EMMC128-IY29-5B111) |
 
 ## JTAG TAP
 
@@ -44,8 +44,17 @@ This only verifies the TAP responds; it does **not** initialize RAM or flash.
 
 ### Start OpenOCD
 
+Enter the bodybytes dev shell first — it sets `OPENOCD_SCRIPTS` so the
+`mt7628.cfg` and its dependencies are found without a `cd`:
+
 ```sh
-cd /path/to/openocd-scripts/mt7628
+cd /path/to/bodybytes
+nix develop
+```
+
+Then start OpenOCD from any directory:
+
+```sh
 openocd -f interface/jlink.cfg \
         -c "transport select jtag" \
         -f mt7628.cfg
@@ -197,80 +206,10 @@ ready to load code.
 
 ---
 
-## Step 3 — Load and run U-Boot (RAM boot)
+## Step 3 — Load and run U-Boot
 
-```tcl
-load_image u-boot-mt7628-ram.bin 0x80200000 bin
-reg pc 0x80200000
-resume
-```
-
----
-
-## U-Boot — Switch Console to UART2
-
-The pre-built `u-boot-mt7628-ram.bin` uses UART0 (UARTLITE0). To use UART2
-you need to rebuild U-Boot with two changes.
-
-### MT7628 UART register map
-
-| U-Boot index | Hardware name | Base address |
-|--------------|---------------|--------------|
-| 1 (default)  | UARTLITE0     | 0x10000C00   |
-| 2            | UARTLITE1     | 0x10000D00   |
-| 3            | UARTLITE2     | 0x10000E00   |
-
-### 1 — defconfig change
-
-In `configs/mt7628_rfb_defconfig`, change:
-
-```
-CONFIG_CONS_INDEX=1
-```
-to:
-```
-CONFIG_CONS_INDEX=3
-```
-
-### 2 — GPIO pin mux
-
-UART2 pins are shared with other functions and must be muxed in software.
-The mux is controlled by the `GPIO_MODE` register at `0xb0000060`.
-
-In `board/ralink/mt7628/mt7628_rfb.c` (or your board file), in
-`board_early_init_f()`, set the UART2 mux bits so the SoC routes UART2
-TX/RX to the physical pins rather than their default function.
-
-The exact bits depend on which GPIO pins UART2 is routed to on your board.
-Check the schematic for the TP15/TP14 side of UART2 and cross-reference the
-MT7628AN datasheet GPIO multiplexing table (section "GPIO Mode Register") to
-find the correct field and value.
-
-You can verify the current mux state from the OpenOCD telnet prompt before
-booting:
-
-```tcl
-# Read GPIO_MODE — check UART2 mux field matches expected value
-mdw 0xb0000060
-```
-
-### 3 — Rebuild
-
-```sh
-make mt7628_rfb_defconfig
-make -j$(nproc)
-```
-
-The output `u-boot.bin` is a NOR-boot image. For JTAG RAM loading use
-`u-boot-ram.bin` (if your build produces it) or strip the SPL prefix if
-present.
-
-### Verify
-
-Once U-Boot is running, the console prompt should appear on UART2 at
-115200 8N1. If there is no output, the most likely causes are:
-- GPIO mux not set — UART2 TX pin still driven by its default function
-- Baud rate mismatch — check `CONFIG_BAUDRATE` in the defconfig
+Once DRAM is initialised, see [uboot.md](uboot.md) for RAM-boot and build
+instructions.
 
 ---
 

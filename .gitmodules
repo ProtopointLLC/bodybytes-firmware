@@ -1,0 +1,6 @@
+[submodule "openocd-scripts"]
+	path = openocd-scripts
+	url = https://github.com/mtk-openwrt/openocd-scripts.git
+[submodule "u-boot"]
+	path = u-boot
+	url = https://source.denx.de/u-boot/u-boot.git

@@ -1,17 +1,37 @@
-# bodybytes
+# bodybytes-firmware
 
-Development environment for JTAG debugging the MT7628AN SoC via OpenOCD.
+Development environment for the bodybytes implantable WiFi router — MT7628AN
+SoC, 256 MB DDR2, 64 MB SPI NOR, 128 GB eMMC.
 
-## OpenOCD scripts
+## Repositories
 
-Custom OpenOCD target scripts live in a separate repository at
-`/home/christoph/Documents/GitHub/openocd-scripts`. The `mt7628/` subdirectory
-there contains `mt7628.cfg`, `mmio.tcl`, and `memc.tcl`.
+This repo uses two submodules:
 
-The dev shell (`nix develop`) sets `OPENOCD_SCRIPTS` to that directory so
-OpenOCD can find those scripts by name without requiring a `cd` first.
+| Path | Contents |
+|------|----------|
+| `openocd-scripts/` | MT7628 OpenOCD target scripts (`mt7628.cfg`, `mmio.tcl`, `memc.tcl`) |
+| `u-boot/` | U-Boot source, pinned to tag `v2026.04` |
 
-## Connecting to the board
+Clone with submodules:
 
-See [docs/notes.md](docs/notes.md) for full wiring, JTAG bring-up, PLL/DRAM
-initialisation, and U-Boot RAM-boot instructions.
+```sh
+git clone --recurse-submodules <url>
+```
+
+## Dev shell
+
+A single Nix dev shell covers both OpenOCD and U-Boot work:
+
+```sh
+nix develop
+```
+
+This sets:
+- `OPENOCD_SCRIPTS` — points to `openocd-scripts/mt7628/` so OpenOCD finds target scripts by name
+- `CROSS_COMPILE`, `ARCH` — MIPS cross-compilation environment for U-Boot
+- `KCPPFLAGS` — injects `CFG_SYS_NS16550_COM3` for the UART2 SPL console
+
+## Documentation
+
+- [docs/jtag.md](docs/jtag.md) — wiring, JTAG connectivity check, PLL/DRAM bootstrap
+- [docs/uboot.md](docs/uboot.md) — U-Boot configure, build, and full install sequence
