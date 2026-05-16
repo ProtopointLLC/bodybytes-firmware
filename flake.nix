@@ -63,6 +63,8 @@
         # Do NOT set CROSS_COMPILE — OpenWRT builds its own MIPS toolchain.
         # Usage: nix develop .#openwrt
         openwrt = pkgs.mkShell {
+          hardeningDisable = [ "format" ];
+
           buildInputs = with pkgs; [
             # Core build tools
             gcc
