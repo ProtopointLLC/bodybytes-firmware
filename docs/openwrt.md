@@ -9,16 +9,19 @@ Target: `ramips` / subtarget `mt76x8`
 ### Build environment
 
 OpenWRT **builds its own MIPS cross-compiler** from source. Do not use the
-U-Boot `nix develop .#uboot` shell — it sets `CROSS_COMPILE` and `ARCH` which would
-interfere.
+U-Boot `nix develop .#uboot` shell — it sets `CROSS_COMPILE` and `ARCH` which
+would interfere.
 
 ```sh
 cd /path/to/bodybytes
 nix develop .#openwrt
 ```
 
-This provides all required host tools (gcc, perl, rsync, wget, …) without
-setting any cross-compilation variables.
+This drops into a `buildFHSEnv` shell that provides all required host tools
+without setting any cross-compilation variables. It also sets `AR=gcc-ar`
+(LTO-aware archiver for host builds) and `FAKEROOTDONTTRYCHOWN=1` (works
+around a fakeroot/bwrap user-namespace limitation that would otherwise produce
+ownership warnings and a non-zero exit during image assembly).
 
 ### Update feeds
 
@@ -199,21 +202,22 @@ Enable additional packages as needed (e.g. `kmod-usb2`, `kmod-usb-ohci`).
 ## 4 — Build
 
 ```sh
-make -j$(nproc)
+make defconfig download world
 ```
 
 First build downloads the MIPS cross-toolchain and all package sources —
-this takes a while. Subsequent builds are incremental.
+this takes a while. Subsequent builds are incremental (`make world` only).
 
 ### Output
 
 ```
 bin/targets/ramips/mt76x8/
+  openwrt-ramips-mt76x8-bodybytes_bodybytes-initramfs-kernel.bin
   openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
 ```
 
-This is a raw image: uImage (lzma-compressed kernel + DTB) followed by a
-squashfs rootfs. Write it directly to eMMC sector 0.
+The sysupgrade image is a raw image: uImage (lzma-compressed kernel + DTB)
+followed by a squashfs rootfs. Write it directly to eMMC sector 0.
 
 ---
 

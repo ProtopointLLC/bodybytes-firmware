@@ -13,9 +13,7 @@
     {
       devShells.x86_64-linux = {
 
-        # U-Boot build + JTAG/OpenOCD.
-        # Sets CROSS_COMPILE and ARCH for the MIPS toolchain.
-        # Usage: nix develop .#uboot
+        # U-Boot build + JTAG/OpenOCD.  Usage: nix develop .#uboot
         uboot = pkgs.mkShell {
           shellHook = ''
             export OPENOCD_SCRIPTS="$PWD/openocd-scripts/mt7628"
@@ -24,95 +22,51 @@
           '';
 
           buildInputs = with pkgs; [
-            # OpenOCD — JTAG interface
             openocd
-
-            # Cross toolchain (mipsel-unknown-linux-gnu-gcc / -ld / ...)
             crossPkgs.buildPackages.gcc
             crossPkgs.buildPackages.binutils
-
-            # U-Boot build tools
-            gnumake
-            bison
-            flex
-            bc
-            dtc
-            swig
-            pkg-config
-
-            # Crypto / signing (FIT images use CONFIG_FIT=y)
-            openssl
-            openssl.dev
-            gnutls
-            gnutls.dev
-
-            # menuconfig TUI
-            ncurses
-            ncurses.dev
-
-            # Python + libraries used by U-Boot host scripts
+            gnumake bison flex bc dtc swig pkg-config
+            openssl openssl.dev gnutls gnutls.dev
+            ncurses ncurses.dev
             (python3.withPackages (ps: with ps; [
-              pyelftools
-              pycryptodome
-              setuptools
+              pyelftools pycryptodome setuptools
             ]))
           ];
         };
 
-        # OpenWRT shell: host build tools only.
+        # OpenWRT host build shell.  Usage: nix develop .#openwrt
+        # buildFHSEnv provides /bin/bash etc. that upstream scripts hard-code.
         # Do NOT set CROSS_COMPILE — OpenWRT builds its own MIPS toolchain.
-        # Usage: nix develop .#openwrt
-        openwrt = pkgs.mkShell {
-          hardeningDisable = [ "format" ];
+        openwrt = (pkgs.buildFHSEnv {
+          name = "openwrt";
 
-          buildInputs = with pkgs; [
-            # Core build tools
-            gcc
-            gnumake
-            bison
-            flex
-            gawk
-            patch
-            diffutils   # diff, cmp
-            findutils   # find, xargs
-            coreutils   # cp, seq, realpath, stat, install, …
-            util-linux  # getopt with --long support
-
-            # Source management
-            git
-            rsync
-
-            # Download / archive
-            wget
-            unzip
-            bzip2
-            gzip
-
-            # Scripting
-            perl        # core modules (Data::Dumper, FindBin, …) are bundled
-            (python3.withPackages (ps: with ps; [
-              setuptools
-            ]))
-
-            # menuconfig TUI
-            ncurses
-            ncurses.dev
-
-            # Library headers used by host-tool builds
-            openssl
-            openssl.dev
-            zlib
-            zlib.dev
-            gettext     # libintl.h (musl-based toolchain check)
-
-            # Misc utilities OpenWRT checks for
-            file
-            which
-            pkg-config
-            swig
-            dtc
+          targetPkgs = pkgs: with pkgs; [
+            gcc gnumake bison flex gawk patch
+            diffutils findutils coreutils util-linux
+            git rsync wget unzip bzip2 gzip
+            perl
+            (python3.withPackages (ps: with ps; [ setuptools ]))
+            ncurses ncurses.dev
+            openssl openssl.dev zlib zlib.dev
+            gettext     # libintl.h needed by musl toolchain check
+            file which pkg-config swig dtc bash
+            gcc.cc      # gcc-ar / gcc-nm / gcc-ranlib for LTO host builds
           ];
-        };
+
+          hardeningDisable = [ "all" ];
+
+          profile = ''
+            # FHS base sets AR=ar; override so Meson uses the LTO-aware archiver.
+            # Name-only lets cross builds prepend TARGET_CROSS correctly.
+            export AR=gcc-ar
+            export RANLIB=gcc-ranlib
+            export NM=gcc-nm
+            # bwrap user namespace doesn't map uid 0 → fchownat returns EINVAL,
+            # which fakeroot doesn't swallow (unlike EPERM). Skip the real chown;
+            # ownership is tracked in fakeroot's db and ends up correct in images.
+            export FAKEROOTDONTTRYCHOWN=1
+          '';
+        }).env;
 
       };
 

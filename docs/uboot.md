@@ -266,11 +266,17 @@ JTAG intervention.
 
 ### 3f — Write OpenWRT to eMMC
 
-Obtain or build a raw OpenWRT disk image for this board. Pre-calculate the block
-count on the host (512 bytes per block):
+The sysupgrade image is built at:
+
+```
+openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
+```
+
+Pre-calculate the block count on the host (512 bytes per block):
 
 ```sh
-blkcount=$(( ($(stat -c%s openwrt.img) + 511) / 512 ))
+img=openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
+blkcount=$(( ($(stat -c%s "$img") + 511) / 512 ))
 printf "block count: 0x%x\n" $blkcount
 ```
 
@@ -280,7 +286,7 @@ Load the image into RAM via OpenOCD, then write to eMMC from the U-Boot console.
 
 ```tcl
 halt
-load_image /path/to/openwrt.img 0x82000000 bin
+load_image openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin 0x82000000 bin
 resume
 ```
 
@@ -294,12 +300,12 @@ mmc dev 0
 mmc write 0x82000000 0 <block_count_hex>
 ```
 
-Alternatively, once WiFi is configured, TFTP is more practical for large images:
+Alternatively, once networking is up, TFTP is more practical for large images:
 
 ```
 setenv ipaddr 192.168.1.1
 setenv serverip 192.168.1.100
-tftpboot 0x82000000 openwrt.img
+tftpboot 0x82000000 openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
 mmc dev 0
 mmc write 0x82000000 0 <block_count_hex>
 ```
