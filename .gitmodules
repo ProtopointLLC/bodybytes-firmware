@@ -4,3 +4,6 @@
 [submodule "u-boot"]
 	path = u-boot
 	url = https://source.denx.de/u-boot/u-boot.git
+[submodule "openwrt"]
+	path = openwrt
+	url = https://git.openwrt.org/openwrt/openwrt.git

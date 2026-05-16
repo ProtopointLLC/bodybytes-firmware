@@ -2,6 +2,19 @@
 
 Source tree: `u-boot/` submodule (tag `v2026.04`)
 
+### Board files
+
+All board-specific files live inside the `u-boot/` submodule and are tracked
+via the submodule commit pointer.
+
+| File | Purpose |
+|------|---------|
+| `u-boot/configs/bodybytes_defconfig` | Complete standalone defconfig |
+| `u-boot/arch/mips/dts/bodybytes,bodybytes.dts` | Full board device tree |
+| `u-boot/include/configs/bodybytes.h` | Board config header (`CFG_SYS_NS16550_COM3`) |
+| `u-boot/board/bodybytes/bodybytes/Kconfig` | Board vendor/name declarations |
+| `u-boot/board/bodybytes/bodybytes/MAINTAINERS` | File ownership record |
+
 ---
 
 ## 1 — Configure
@@ -10,31 +23,26 @@ Source tree: `u-boot/` submodule (tag `v2026.04`)
 
 ```sh
 cd /path/to/bodybytes
-nix develop
+nix develop .#uboot
 ```
 
-This sets `CROSS_COMPILE`, `ARCH`, and `KCPPFLAGS` automatically.
+This sets `CROSS_COMPILE` and `ARCH` automatically.
 
-### Load the board defconfig and apply the Bodybytes fragment
-
-All board-specific changes are collected in `bodybytes.config` at the root of
-this repository. Run the following from the bodybytes root (with `nix develop` active):
+### Load the board defconfig
 
 ```sh
 cd u-boot
-make mt7628_rfb_defconfig
-scripts/kconfig/merge_config.sh -m .config ../bodybytes.config
-make olddefconfig
+make bodybytes_defconfig
 ```
 
-`merge_config.sh -m` merges the fragment into `.config` without running a full
-`menuconfig` pass; `make olddefconfig` then resolves any newly-visible
-dependencies with their defaults.
+This loads `u-boot/configs/bodybytes_defconfig` — a complete, standalone
+defconfig that already incorporates all board-specific settings. The individual
+settings and why they are needed are documented below.
 
-To add or change options, edit `bodybytes.config` and re-run the four commands
-above. The individual settings and why they are needed are documented below.
+To change a Kconfig option, edit `u-boot/configs/bodybytes_defconfig` directly
+and re-run `make bodybytes_defconfig`.
 
-### What the fragment sets
+### What the defconfig sets
 
 #### UART2 console
 
@@ -44,9 +52,9 @@ The default config uses UART0. One setting needs to change.
 mux setup in `arch/mips/mach-mtmips/mt7628/serial.c`.
 
 The SPL serial driver also requires `CFG_SYS_NS16550_COM3` (UART2's MMIO
-address) to be defined. There is no Kconfig symbol for this, so it is injected
-via `KCPPFLAGS` in `flake.nix` — `KBUILD_CPPFLAGS` picks it up without any
-source-tree change.
+address, `0xb0000e00`) to be defined. There is no Kconfig symbol for this; it
+is defined in `u-boot/include/configs/bodybytes.h` under the
+`XPL_BUILD && SPL_SERIAL` guard alongside the other NS16550 constants.
 
 `CONS_INDEX` is 1-based while the hardware names are 0-based, so UARTLITE**2**
 = index **3**:
@@ -69,9 +77,10 @@ on the EPHY/MDI pins — the no-`SPL_UART2_SPIS_PINMUX` path in the SPL sets
 #### eMMC support
 
 The board's 128 GB eMMC is the main OS storage, but the Kconfig options are
-entirely absent from the base defconfig — U-Boot cannot access it without them.
-`bodybytes.config` enables `CONFIG_MMC`, `CONFIG_MMC_WRITE`, `CONFIG_CMD_MMC`,
-and `CONFIG_MMC_MTK`. The DTS already has the MMC controller node enabled.
+entirely absent from the MT7628 RFB defconfig — U-Boot cannot access it without
+them. `bodybytes_defconfig` enables `CONFIG_MMC`, `CONFIG_MMC_WRITE`,
+`CONFIG_CMD_MMC`, and `CONFIG_MMC_MTK`. The DTS has the MMC controller node
+enabled.
 
 #### SPI NOR flash
 
@@ -80,10 +89,10 @@ and `CONFIG_MMC_MTK`. The DTS already has the MMC controller node enabled.
 addresses above 16 MB. Without this option U-Boot can only see the first 16 MB
 of flash.
 
-**Speed** — the base defconfig leaves `CONFIG_SF_DEFAULT_SPEED` and
+**Speed** — the MT7628 RFB defconfig leaves `CONFIG_SF_DEFAULT_SPEED` and
 `CONFIG_ENV_SPI_MAX_HZ` at 1 MHz. `CONFIG_ENV_SPI_MAX_HZ` controls env
 save/restore independently and is not overridden by the DTS
-`spi-max-frequency`; both are set to 25 MHz in `bodybytes.config`.
+`spi-max-frequency`; both are set to 25 MHz in `bodybytes_defconfig`.
 
 Note: the MT7621 SPI controller is half-duplex and does not support quad or
 dual I/O. `CONFIG_SPI_FLASH_SMART_HWCAPS=y` already ensures the driver will
@@ -91,17 +100,19 @@ not attempt modes the controller cannot handle.
 
 #### eMMC DTS: SD vs eMMC profile
 
-The base `mediatek,mt7628-rfb.dts` configures the MMC node for a removable SD
-card on a router board. Three things are wrong for bodybytes and are fixed in
-`bodybytes.dtsi`:
+The MT7628 RFB DTS configures the MMC node for a removable SD card. Three
+things are wrong for bodybytes and are corrected in
+`u-boot/arch/mips/dts/bodybytes,bodybytes.dts`:
 
-**Pinctrl** — the base DTS uses `sd_router_mode`, which remaps `i2c`, `uart1`,
+**Pinctrl** — the RFB DTS uses `sd_router_mode`, which remaps `i2c`, `uart1`,
 `sdmode`, and other pin groups as GPIO to free them for routing chips. On
 bodybytes those peripherals are in use; their pin assignments must not change.
-`sd_iot_mode` sets `EPHY_APGIO_AIO_EN[4:1]=0xf` (MDI P1–P4 pads go digital),
-`SD_MODE=0` (SDXC signals on EPHY P3/P4 pads), and `ESD=0` (IoT routing).
-The SDXC data/cmd/clk lines emerge on the MDI P3/P4 pads exactly as the
-schematic wires them (SoC pins 51–57).
+`sd_iot_mode` (pre-defined in `mt7628a.dtsi`) sets
+`EPHY_APGIO_AIO_EN[4:1]=0xf` (MDI P1–P4 pads go digital), `SD_MODE=0` (SDXC
+signals on EPHY P3/P4 pads), and `ESD=0` (IoT routing). The SDXC
+data/cmd/clk lines emerge on the MDI P3/P4 pads exactly as the schematic wires
+them (SoC pins 51–57). `mdi_p1_gpio` is defined in the board DTS and sets
+SPIS_MODE=gpio, making MDI_TN_P1 (GPIO#15) driveable as the eMMC reset output.
 
 **Capability flags** — `cap-sd-highspeed` targets removable SD cards. For a
 soldered eMMC this wastes time on card-detect polling and applies the wrong
@@ -112,20 +123,12 @@ HS400 require 1.8 V VCCQ and are not reachable through the MT7628 SDXC
 controller regardless.
 
 **Hardware reset** — the eMMC reset pin is wired to MDI_TN_P1 (SoC pin 42,
-Linux GPIO 42, gpio1 offset 10, active-low). U-Boot pulses it at power-up via a
+gpio0 offset 15, active-low). U-Boot pulses it at power-up via a
 `mmc-pwrseq-emmc` node to clear fault conditions. The eMMC's RST_n function is
 disabled by default (EXT_CSD[162] = 0x00); pulsing it while disabled is a safe
 no-op. If the OS later enables RST_n (EXT_CSD[162] = 0x01), the pulse will
 actually reset the device on subsequent power-ups — which is the intended
 behaviour.
-
-The override lives in `bodybytes.dtsi` at the root of this repo. U-Boot's
-`CONFIG_DEVICE_TREE_INCLUDES` appends it as an `#include` to the base DTS
-before the device tree is compiled — no in-tree changes needed.
-
-`CONFIG_DEVICE_TREE_INCLUDES` is set in `bodybytes.config` as
-`"../../../../bodybytes.dtsi"` — a path relative to `u-boot/arch/mips/dts/`,
-where the C preprocessor runs during the DTS build. No hardcoded paths.
 
 #### GPIO pin map (EPHY/MDI pads used as GPIO)
 
@@ -153,8 +156,8 @@ controller and are not accessible as GPIO while `sd_iot_mode` is active:
 
 ### Saving config changes
 
-Add any board-specific changes to `bodybytes.config` and re-run the four
-configure commands above.
+Edit `u-boot/configs/bodybytes_defconfig` directly and re-run
+`make bodybytes_defconfig`.
 
 ---
 
@@ -238,12 +241,14 @@ In the U-Boot console:
 
 ```
 sf probe
-sf erase 0 0x50000
+sf erase 0 0x40000
 sf write 0x80080000 0 0x<byte_count_hex>
 ```
 
-The erase covers 0x50000 (320 KB). The env sector starts at 0x30000; erasing it
-on first install is harmless — U-Boot writes it fresh on the first `saveenv`.
+The erase covers 0x40000 (256 KB): the u-boot binary (0–0x2FFFF) and the env
+sector (0x30000–0x3FFFF). The env is erased intentionally — U-Boot writes it
+fresh on the first `saveenv`. The factory sector (0x40000, WiFi EEPROM) is
+deliberately excluded so that re-flashing does not destroy calibration data.
 
 After a successful write, power-cycle the board.
 
@@ -301,18 +306,15 @@ mmc write 0x82000000 0 <block_count_hex>
 
 ### 3g — Boot OpenWRT from eMMC
 
-U-Boot needs a `bootcmd` that reads the kernel from eMMC and boots it. The exact
-command depends on the OpenWRT image layout (FIT image, raw kernel, extlinux,
-etc.) and is defined when the OpenWRT target for this board is created.
-
-A minimal example assuming a FIT image at the start of eMMC:
+See [openwrt.md §6](openwrt.md#6--boot-configuration) for the `bootcmd`
+and `bootargs` configuration. In brief:
 
 ```
-setenv bootcmd 'mmc dev 0; mmc read 0x82000000 0 0x4000; bootm 0x82000000'
+setenv bootcmd 'mmc dev 0; mmc read 0x82000000 0 0x10000; bootm 0x82000000'
 saveenv
 boot
 ```
 
 To enter the recovery bootloader instead of the normal boot path (sensor
-trigger, MDI_TP_P1 / SoC pin 40 / gpio1 offset 8), set `CONFIG_PREBOOT` to
+trigger, MDI_TP_P1 / SoC pin 40 / gpio0 offset 14), set `CONFIG_PREBOOT` to
 read that GPIO and override `bootcmd` before the normal boot proceeds.
