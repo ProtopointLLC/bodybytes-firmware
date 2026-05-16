@@ -13,7 +13,7 @@
     {
       devShells.x86_64-linux = {
 
-        # U-Boot build + JTAG/OpenOCD.  Usage: nix develop .#uboot
+        # U-Boot build + JTAG/OpenOCD.
         uboot = pkgs.mkShell {
           shellHook = ''
             export OPENOCD_SCRIPTS="$PWD/openocd-scripts/mt7628"
@@ -23,6 +23,7 @@
 
           buildInputs = with pkgs; [
             openocd
+            inetutils
             crossPkgs.buildPackages.gcc
             crossPkgs.buildPackages.binutils
             gnumake bison flex bc dtc swig pkg-config
@@ -34,9 +35,7 @@
           ];
         };
 
-        # OpenWRT host build shell.  Usage: nix develop .#openwrt
-        # buildFHSEnv provides /bin/bash etc. that upstream scripts hard-code.
-        # Do NOT set CROSS_COMPILE — OpenWRT builds its own MIPS toolchain.
+        # OpenWRT host build shell.
         openwrt = (pkgs.buildFHSEnv {
           name = "openwrt";
 
@@ -47,24 +46,20 @@
             perl
             (python3.withPackages (ps: with ps; [ setuptools ]))
             ncurses ncurses.dev
-            openssl openssl.dev zlib zlib.dev
-            gettext     # libintl.h needed by musl toolchain check
+            openssl openssl.dev zlib zlib.dev xz
+            gettext
             file which pkg-config swig dtc bash
-            gcc.cc      # gcc-ar / gcc-nm / gcc-ranlib for LTO host builds
+            (lib.lowPrio gcc.cc)
           ];
 
-          hardeningDisable = [ "all" ];
-
           profile = ''
-            # FHS base sets AR=ar; override so Meson uses the LTO-aware archiver.
-            # Name-only lets cross builds prepend TARGET_CROSS correctly.
             export AR=gcc-ar
             export RANLIB=gcc-ranlib
             export NM=gcc-nm
-            # bwrap user namespace doesn't map uid 0 → fchownat returns EINVAL,
-            # which fakeroot doesn't swallow (unlike EPERM). Skip the real chown;
-            # ownership is tracked in fakeroot's db and ends up correct in images.
             export FAKEROOTDONTTRYCHOWN=1
+            export NIX_CFLAGS_COMPILE="-I/usr/include"
+            export NIX_LDFLAGS="-L/usr/lib"
+            export NIX_HARDENING_ENABLE=""
           '';
         }).env;
 

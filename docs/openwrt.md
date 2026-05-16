@@ -184,27 +184,20 @@ to eMMC. The remaining eMMC space is available to the OS as data storage.
 
 ```sh
 cd openwrt
-make menuconfig
+make defconfig CONFIG_TARGET_ramips=y CONFIG_TARGET_ramips_mt76x8=y CONFIG_TARGET_ramips_mt76x8_DEVICE_bodybytes_bodybytes=y
 ```
 
-Set:
-
-| Option | Value |
-|--------|-------|
-| Target System | `MediaTek Ralink MIPS` |
-| Subtarget | `MT76x8 based boards` |
-| Target Profile | `Bodybytes` |
-
-Enable additional packages as needed (e.g. `kmod-usb2`, `kmod-usb-ohci`).
+This produces a full `.config` with the bodybytes profile selected and all
+defaults filled in. To add or change packages, run `make menuconfig` afterwards.
 
 ---
 
 ## 4 — Build
 
-All commands run from inside `openwrt/` (as set up in §3).
+All commands run from inside `openwrt/`.
 
 ```sh
-make defconfig download world
+make download world
 ```
 
 The first build downloads the MIPS cross-toolchain and all package sources —

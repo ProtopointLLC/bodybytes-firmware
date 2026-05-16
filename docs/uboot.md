@@ -200,6 +200,7 @@ U-Boot console should appear on UART2 (TP19/TP20) at **115200 8N1** —
 `CONFIG_BAUDRATE` defaults to 115200 and is not overridden in the MT7628 config.
 
 If there is no output:
+
 - Confirm `CONFIG_CONS_INDEX=3` is set and the binary was rebuilt after the change
 - Confirm your terminal is set to 115200 8N1
 

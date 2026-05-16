@@ -21,7 +21,7 @@
 
 ## Wiring — Board Connector → J-Link Mini EDU
 
-Reference: https://kb.segger.com/9-pin_JTAG/SWD_connector
+Reference: <https://kb.segger.com/9-pin_JTAG/SWD_connector>
 
 | Board pos | Wire   | Test point | JTAG signal | SWD silkscreen | J-Link pin |
 |-----------|--------|------------|-------------|----------------|------------|
@@ -132,6 +132,7 @@ mdw 0xb0000010
 ```
 
 This reads SYSCFG0. Bit 6 is the hardware XTAL strap:
+
 - `0` → 20/40 MHz crystal — correct for this board
 - `1` → 25 MHz crystal — wrong; PLL init will produce the wrong CPU frequency
 
@@ -144,6 +145,7 @@ cpu_pll_init
 ```
 
 What this does:
+
 - Polls `0xb0000028` to see if the ROM already set up the PLL (it won't have,
   because you halted early).
 - Takes the `CPU_PLL_FROM_XTAL` path: tells the PLL to lock to the 40 MHz
@@ -161,6 +163,7 @@ dram_init 256
 ```
 
 What this does:
+
 - Reads SYSCFG0 bit 0 to confirm DDR2 (not DDR1) — should be 0 on your board.
 - Pulses the DDR controller reset (200 ms hold).
 - Writes the DDR2 PHY configuration registers (drive strength, ODT, DLL).
