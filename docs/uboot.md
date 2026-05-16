@@ -2,10 +2,9 @@
 
 Source tree: `u-boot/` submodule (tag `v2026.04`)
 
-### Board files
+## Board files
 
-All board-specific files live inside the `u-boot/` submodule and are tracked
-via the submodule commit pointer.
+All board-specific files live inside the `u-boot/` submodule.
 
 | File | Purpose |
 |------|---------|
@@ -192,7 +191,7 @@ Follow [jtag.md](jtag.md) §1 and §2 to verify JTAG connectivity and bring up
 PLL and DRAM. Then load `u-boot.bin` from the OpenOCD telnet prompt:
 
 ```tcl
-load_image u-boot.bin 0x80200000 bin
+load_image u-boot/u-boot.bin 0x80200000 bin
 reg pc 0x80200000
 resume
 ```
@@ -227,7 +226,7 @@ RAM via OpenOCD. In the telnet session:
 
 ```tcl
 halt
-load_image /path/to/u-boot-with-spl.bin 0x80080000 bin
+load_image u-boot/u-boot-with-spl.bin 0x80080000 bin
 resume
 ```
 
@@ -312,8 +311,7 @@ mmc write 0x82000000 0 <block_count_hex>
 
 ### 3g — Boot OpenWRT from eMMC
 
-See [openwrt.md §6](openwrt.md#6--boot-configuration) for the `bootcmd`
-and `bootargs` configuration. In brief:
+Set `bootcmd` once from the U-Boot console (see also [openwrt.md §6](openwrt.md#6--boot-configuration)):
 
 ```
 setenv bootcmd 'mmc dev 0; mmc read 0x82000000 0 0x10000; bootm 0x82000000'

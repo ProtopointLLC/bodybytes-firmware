@@ -201,11 +201,13 @@ Enable additional packages as needed (e.g. `kmod-usb2`, `kmod-usb-ohci`).
 
 ## 4 — Build
 
+All commands run from inside `openwrt/` (as set up in §3).
+
 ```sh
 make defconfig download world
 ```
 
-First build downloads the MIPS cross-toolchain and all package sources —
+The first build downloads the MIPS cross-toolchain and all package sources —
 this takes a while. Subsequent builds are incremental (`make world` only).
 
 ### Output
@@ -231,10 +233,10 @@ mmc dev 0
 mmc write 0x82000000 0 <block_count_hex>
 ```
 
-Pre-calculate block count on the host (512 bytes/block):
+Pre-calculate block count on the host (512 bytes/block), from the project root:
 
 ```sh
-img=openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
+img=openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
 blkcount=$(( ($(stat -c%s "$img") + 511) / 512 ))
 printf "block count: 0x%x\n" $blkcount
 ```
@@ -243,8 +245,7 @@ printf "block count: 0x%x\n" $blkcount
 
 ## 6 — Boot configuration
 
-U-Boot reads the kernel from eMMC. A FIT-based `bootcmd` (set once via
-U-Boot console):
+Set `bootcmd` once from the U-Boot console:
 
 ```
 setenv bootcmd 'mmc dev 0; mmc read 0x82000000 0 0x10000; bootm 0x82000000'

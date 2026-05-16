@@ -8,8 +8,8 @@
 | JTAG adapter | Segger J-Link Mini EDU |
 | Crystal | 40 MHz external oscillator |
 | RAM | 256 MB DDR2 |
-| Boot flash | 64 MB SPI NOR (bootloader + OS) |
-| App storage | 128 GB eMMC NAND (Kingston EMMC128-IY29-5B111) |
+| Boot flash | 64 MB SPI NOR (U-Boot + WiFi EEPROM) |
+| App storage | 128 GB eMMC (Kingston EMMC128-IY29-5B111) — OS lives here |
 
 ## JTAG TAP
 
@@ -40,16 +40,16 @@ Reference: https://kb.segger.com/9-pin_JTAG/SWD_connector
 
 ## Step 1 — Check JTAG Connectivity (core health check)
 
-This only verifies the TAP responds; it does **not** initialize RAM or flash.
+This only verifies the TAP responds; it does **not** initialize RAM.
 
 ### Start OpenOCD
 
-Enter the bodybytes dev shell first — it sets `OPENOCD_SCRIPTS` so the
-`mt7628.cfg` and its dependencies are found without a `cd`:
+Enter the dev shell first — it sets `OPENOCD_SCRIPTS` so `mt7628.cfg` and
+its dependencies are found by name:
 
 ```sh
 cd /path/to/bodybytes
-nix develop
+nix develop .#uboot
 ```
 
 Then start OpenOCD from any directory:
@@ -208,8 +208,7 @@ ready to load code.
 
 ## Step 3 — Load and run U-Boot
 
-Once DRAM is initialised, see [uboot.md](uboot.md) for RAM-boot and build
-instructions.
+Once DRAM is initialised, continue with [uboot.md §3a](uboot.md#3a--bootstrap-and-smoke-test) to RAM-boot U-Boot.
 
 ---
 
@@ -217,11 +216,11 @@ instructions.
 
 | Region | Interface | Size | Contents |
 |--------|-----------|------|----------|
-| SPI NOR | SPI bus 0 | 64 MB | Bootloader (U-Boot) + OS image |
-| NAND | Parallel NAND / SPI-NAND | 128 GB | Application data / rootfs overlay |
+| SPI NOR | SPI bus 0 | 64 MB | U-Boot (0x0), env (0x30000), WiFi EEPROM (0x40000) |
+| eMMC | SDXC / MMC | 128 GB | OS kernel + rootfs (sector 0), remaining space for data |
 
 > SPI NOR is mapped at `0x1c000000` (physical) / `0x9c000000` (KSEG1) on the MT7628.
-> NAND is accessed via the NAND Flash Controller at `0xbe000000`.
+> eMMC is accessed via the SDXC controller; the OS image is written raw to sector 0.
 
 ---
 

@@ -3,14 +3,13 @@
 Development environment for the bodybytes implantable WiFi router — MT7628AN
 SoC, 256 MB DDR2, 64 MB SPI NOR, 128 GB eMMC.
 
-## Repositories
-
-This repo uses two submodules:
+## Submodules
 
 | Path | Contents |
 |------|----------|
 | `openocd-scripts/` | MT7628 OpenOCD target scripts (`mt7628.cfg`, `mmio.tcl`, `memc.tcl`) |
 | `u-boot/` | U-Boot source, pinned to tag `v2026.04` |
+| `openwrt/` | OpenWRT source tree with bodybytes board files |
 
 Clone with submodules:
 
@@ -18,20 +17,15 @@ Clone with submodules:
 git clone --recurse-submodules <url>
 ```
 
-## Dev shell
+## Dev shells
 
-A single Nix dev shell covers both OpenOCD and U-Boot work:
-
-```sh
-nix develop
-```
-
-This sets:
-- `OPENOCD_SCRIPTS` — points to `openocd-scripts/mt7628/` so OpenOCD finds target scripts by name
-- `CROSS_COMPILE`, `ARCH` — MIPS cross-compilation environment for U-Boot
-- `KCPPFLAGS` — injects `CFG_SYS_NS16550_COM3` for the UART2 SPL console
+| Shell | Purpose |
+|-------|---------|
+| `nix develop .#uboot` | U-Boot build + OpenOCD/JTAG. Sets `CROSS_COMPILE`, `ARCH`, `OPENOCD_SCRIPTS`. |
+| `nix develop .#openwrt` | OpenWRT host build. FHS environment; sets `AR`, `NM`, `RANLIB`, `FAKEROOTDONTTRYCHOWN`. |
 
 ## Documentation
 
-- [docs/jtag.md](docs/jtag.md) — wiring, JTAG connectivity check, PLL/DRAM bootstrap
+- [docs/jtag.md](docs/jtag.md) — JTAG wiring, connectivity check, PLL/DRAM bootstrap
 - [docs/uboot.md](docs/uboot.md) — U-Boot configure, build, and full install sequence
+- [docs/openwrt.md](docs/openwrt.md) — OpenWRT build, board files reference, and eMMC flash
