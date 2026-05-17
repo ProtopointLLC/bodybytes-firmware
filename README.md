@@ -19,6 +19,8 @@ git clone --recurse-submodules <url>
 
 ## Dev shells
 
+Requires Linux and [Nix](https://nixos.org/download/) with flakes enabled.
+
 | Shell | Purpose |
 |-------|---------|
 | `nix develop .#uboot` | U-Boot build + OpenOCD/JTAG. Sets `CROSS_COMPILE`, `ARCH`, `OPENOCD_SCRIPTS`. |

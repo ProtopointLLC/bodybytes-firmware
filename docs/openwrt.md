@@ -199,11 +199,12 @@ make defconfig
 All commands run from inside `openwrt/`.
 
 ```sh
-make download world
+make download
+make world -j$(nproc)
 ```
 
 The first build downloads the MIPS cross-toolchain and all package sources —
-this takes a while. Subsequent builds are incremental (`make world` only).
+this takes a while. Subsequent builds are incremental (`make world` only). Note that `make world` performs some smaller downloads as well.
 
 ### Output
 
