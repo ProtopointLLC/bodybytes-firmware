@@ -184,11 +184,13 @@ to eMMC. The remaining eMMC space is available to the OS as data storage.
 
 ```sh
 cd openwrt
-make defconfig CONFIG_TARGET_ramips=y CONFIG_TARGET_ramips_mt76x8=y CONFIG_TARGET_ramips_mt76x8_DEVICE_bodybytes_bodybytes=y
+cp ../bodybytes.config .config
+make defconfig
 ```
 
-This produces a full `.config` with the bodybytes profile selected and all
-defaults filled in. To add or change packages, run `make menuconfig` afterwards.
+`bodybytes.config` seeds the target; `make defconfig` expands it into a full
+`.config` with all defaults filled in. To add or change packages, run
+`make menuconfig` afterwards.
 
 ---
 
