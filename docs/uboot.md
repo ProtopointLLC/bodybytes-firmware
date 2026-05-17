@@ -172,7 +172,7 @@ make -j$(nproc)
 |------|-------------|
 | `u-boot.bin` | U-Boot proper, linked at `0x80200000`. Used for JTAG RAM boot. |
 | `spl/u-boot-spl.bin` | SPL binary. Runs from NOR flash; initialises PLL+DRAM then loads U-Boot proper. |
-| `u-boot-with-spl.bin` | Combined NOR flash image: SPL immediately followed by LZMA-compressed U-Boot. Write this to NOR offset 0. Build explicitly with `make u-boot-with-spl.bin`. |
+| `u-boot-with-spl.bin` | Combined NOR flash image: SPL immediately followed by LZMA-compressed U-Boot. Write this to NOR offset 0. |
 
 `CONFIG_SKIP_LOWLEVEL_INIT=y` is set, so `u-boot.bin` expects PLL and DRAM to
 already be initialised — exactly what the OpenOCD scripts provide for JTAG RAM
@@ -207,20 +207,7 @@ If there is no output:
 Confirm the U-Boot prompt before continuing — if it does not work in RAM it will
 not work from NOR flash either.
 
-### 3b — Build the NOR flash image
-
-The combined NOR image is not part of the default `make` target. Build it
-explicitly:
-
-```sh
-make u-boot-with-spl.bin
-```
-
-`u-boot-with-spl.bin` is the SPL concatenated (no padding — `SPL_PAD_TO=0` for
-MTMIPS) with `u-boot-lzma.img` (LZMA-compressed U-Boot proper). This is the
-only file written to NOR flash.
-
-### 3c — Load the NOR image into RAM
+### 3b — Load the NOR image into RAM
 
 While U-Boot is running from the step above, load `u-boot-with-spl.bin` into
 RAM via OpenOCD. In the telnet session:
@@ -235,7 +222,7 @@ resume
 Note the byte count printed by `load_image` — U-Boot does not set `${filesize}`
 after an OpenOCD load, so you will need it for the `sf write` command.
 
-### 3d — Program NOR flash
+### 3c — Program NOR flash
 
 In the U-Boot console:
 
@@ -252,7 +239,7 @@ deliberately excluded so that re-flashing does not destroy calibration data.
 
 After a successful write, power-cycle the board.
 
-### 3e — Verify NOR boot
+### 3d — Verify NOR boot
 
 The MT7628 boot ROM reads SPI flash from offset 0 on power-up and runs the SPL.
 The SPL:
@@ -264,62 +251,6 @@ The SPL:
 U-Boot console should appear on UART2 (TP19/TP20) at 115200 8N1 without any
 JTAG intervention.
 
-### 3f — Write OpenWRT to eMMC
+### 3e — Write and boot OpenWRT
 
-The sysupgrade image is built at:
-
-```
-openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
-```
-
-Pre-calculate the block count on the host (512 bytes per block):
-
-```sh
-img=openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
-blkcount=$(( ($(stat -c%s "$img") + 511) / 512 ))
-printf "block count: 0x%x\n" $blkcount
-```
-
-Load the image into RAM via OpenOCD, then write to eMMC from the U-Boot console.
-
-**Load via OpenOCD** (from the telnet session while U-Boot is running):
-
-```tcl
-halt
-load_image openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin 0x82000000 bin
-resume
-```
-
-`0x82000000` keeps the image above U-Boot's footprint regardless of image size.
-Note the byte count from `load_image`.
-
-**Write to eMMC** (in the U-Boot console):
-
-```
-mmc dev 0
-mmc write 0x82000000 0 <block_count_hex>
-```
-
-Alternatively, once networking is up, TFTP is more practical for large images:
-
-```
-setenv ipaddr 192.168.1.1
-setenv serverip 192.168.1.100
-tftpboot 0x82000000 openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
-mmc dev 0
-mmc write 0x82000000 0 <block_count_hex>
-```
-
-### 3g — Boot OpenWRT from eMMC
-
-Set `bootcmd` once from the U-Boot console (see also [openwrt.md §6](openwrt.md#6--boot-configuration)):
-
-```
-setenv bootcmd 'mmc dev 0; mmc read 0x82000000 0 0x10000; bootm 0x82000000'
-saveenv
-boot
-```
-
-To enter the recovery bootloader instead of the normal boot path (sensor
-trigger, MDI_TP_P1 / SoC pin 40 / gpio0 offset 14), set `CONFIG_PREBOOT` to
-read that GPIO and override `bootcmd` before the normal boot proceeds.
+See [openwrt.md §4](openwrt.md#4--write-to-emmc) and [§5](openwrt.md#5--boot-configuration).

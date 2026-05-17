@@ -33,7 +33,19 @@ cd openwrt
 
 ---
 
-## 2 — Board target files
+## 2 — Configure
+
+```sh
+cd openwrt
+cp ../bodybytes.config .config
+make defconfig
+```
+
+`bodybytes.config` seeds the target; `make defconfig` expands it into a full
+`.config` with all defaults filled in. To add or change packages, run
+`make menuconfig` afterwards.
+
+### Board files
 
 Both board files live inside the `openwrt/` submodule. The submodule is
 pinned to a commit that includes these changes.
@@ -180,21 +192,7 @@ to eMMC. The remaining eMMC space is available to the OS as data storage.
 
 ---
 
-## 3 — Configure
-
-```sh
-cd openwrt
-cp ../bodybytes.config .config
-make defconfig
-```
-
-`bodybytes.config` seeds the target; `make defconfig` expands it into a full
-`.config` with all defaults filled in. To add or change packages, run
-`make menuconfig` afterwards.
-
----
-
-## 4 — Build
+## 3 — Build
 
 All commands run from inside `openwrt/`.
 
@@ -219,17 +217,9 @@ followed by a squashfs rootfs. Write it directly to eMMC sector 0.
 
 ---
 
-## 5 — Write to eMMC
+## 4 — Write to eMMC
 
-See [uboot.md §3f](uboot.md#3f--write-openwrt-to-emmc) for the full
-procedure. In brief, from the U-Boot console after loading the image into RAM:
-
-```
-mmc dev 0
-mmc write 0x82000000 0 <block_count_hex>
-```
-
-Pre-calculate block count on the host (512 bytes/block), from the project root:
+Pre-calculate the block count on the host (512 bytes per block):
 
 ```sh
 img=openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
@@ -237,9 +227,39 @@ blkcount=$(( ($(stat -c%s "$img") + 511) / 512 ))
 printf "block count: 0x%x\n" $blkcount
 ```
 
+Load the image into RAM via OpenOCD, then write to eMMC from the U-Boot console.
+
+**Load via OpenOCD** (from the telnet session while U-Boot is running):
+
+```tcl
+halt
+load_image openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin 0x82000000 bin
+resume
+```
+
+`0x82000000` keeps the image above U-Boot's footprint regardless of image size.
+Note the byte count from `load_image`.
+
+**Write to eMMC** (in the U-Boot console):
+
+```
+mmc dev 0
+mmc write 0x82000000 0 <block_count_hex>
+```
+
+Alternatively, once networking is up, TFTP is more practical for large images:
+
+```
+setenv ipaddr 192.168.1.1
+setenv serverip 192.168.1.100
+tftpboot 0x82000000 openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
+mmc dev 0
+mmc write 0x82000000 0 <block_count_hex>
+```
+
 ---
 
-## 6 — Boot configuration
+## 5 — Boot configuration
 
 Set `bootcmd` once from the U-Boot console:
 
