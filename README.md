@@ -14,7 +14,7 @@ SoC, 256 MB DDR2, 64 MB SPI NOR, 128 GB eMMC.
 Clone with submodules:
 
 ```sh
-git clone --recurse-submodules <url>
+git clone --recurse-submodules https://github.com/ProtopointLLC/bodybytes-firmware.git
 ```
 
 ## Dev shells
