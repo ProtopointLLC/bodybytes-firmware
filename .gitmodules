@@ -1,9 +1,12 @@
 [submodule "openocd-scripts"]
 	path = openocd-scripts
 	url = https://github.com/mtk-openwrt/openocd-scripts.git
+	branch = main
 [submodule "u-boot"]
 	path = u-boot
-	url = https://source.denx.de/u-boot/u-boot.git
+	url = https://github.com/ProtopointLLC/bodybytes-u-boot.git
+	branch = bodybytes
 [submodule "openwrt"]
 	path = openwrt
-	url = https://git.openwrt.org/openwrt/openwrt.git
+	url = https://github.com/ProtopointLLC/bodybytes-openwrt.git
+	branch = bodybytes
