@@ -16,12 +16,13 @@
         # U-Boot build + JTAG/OpenOCD.
         uboot = pkgs.mkShell {
           shellHook = ''
-            export OPENOCD_SCRIPTS="$PWD/openocd-scripts/mt7628"
+            export OPENOCD_SCRIPTS="$PWD/openocd"
             export CROSS_COMPILE=mipsel-unknown-linux-gnu-
             export ARCH=mips
           '';
 
           buildInputs = with pkgs; [
+            picocom
             openocd
             inetutils
             crossPkgs.buildPackages.gcc

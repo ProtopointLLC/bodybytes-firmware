@@ -182,13 +182,16 @@ boot. The SPL handles that initialisation when booting from NOR flash.
 
 ## 3 — Install
 
-Full install sequence: JTAG bootstrap → smoke-test U-Boot in RAM → program NOR
-flash → write OpenWRT to eMMC.
+Full install sequence:
+
+**JTAG bootstrap → smoke-test U-Boot in RAM → program SPI NOR flash → verify NOR boot → write OpenWrt to eMMC.**
 
 ### 3a — Bootstrap and smoke-test
 
-Follow [jtag.md](jtag.md) §1 and §2 to verify JTAG connectivity and bring up
-PLL and DRAM. Then load `u-boot.bin` from the OpenOCD telnet prompt:
+Follow [jtag.md](jtag.md) §1 and §2 to verify JTAG connectivity and initialise
+the PLL and DRAM.
+
+Load `u-boot.bin` into RAM from the OpenOCD telnet prompt:
 
 ```tcl
 load_image u-boot/u-boot.bin 0x80200000 bin
@@ -196,61 +199,98 @@ reg pc 0x80200000
 resume
 ```
 
-U-Boot console should appear on UART2 (TP19/TP20) at **115200 8N1** —
-`CONFIG_BAUDRATE` defaults to 115200 and is not overridden in the MT7628 config.
+`u-boot.bin` is linked for execution at `0x80200000`, so execution begins there
+after setting the program counter.
+
+U-Boot should appear on **UART2 (TP19/TP20)** at **115200 8N1**.
+`CONFIG_BAUDRATE` defaults to 115200 and is not overridden by the MT7628 board
+configuration.
+
+Connect with:
+
+```sh
+picocom -b 115200 --flow n /dev/ttyUSB0
+```
 
 If there is no output:
 
-- Confirm `CONFIG_CONS_INDEX=3` is set and the binary was rebuilt after the change
-- Confirm your terminal is set to 115200 8N1
+- Confirm `CONFIG_CONS_INDEX=3` is set.
+- Confirm the binary was rebuilt after changing the configuration.
+- Confirm your terminal is configured for **115200 8N1**.
+- Confirm the JTAG bootstrap completed successfully and DRAM was initialised.
 
-Confirm the U-Boot prompt before continuing — if it does not work in RAM it will
-not work from NOR flash either.
+Do not continue until U-Boot runs correctly from RAM. If it does not execute
+reliably from RAM, it will not execute correctly after being programmed into
+SPI NOR.
 
 ### 3b — Load the NOR image into RAM
 
-While U-Boot is running from the step above, load `u-boot-with-spl.bin` into
-RAM via OpenOCD. In the telnet session:
+Leave U-Boot running at its prompt.
+
+From the OpenOCD telnet session, load the complete NOR image into RAM:
 
 ```tcl
-halt
 load_image u-boot/u-boot-with-spl.bin 0x80080000 bin
-resume
 ```
 
-`0x80080000` is above the work area and clear of U-Boot proper at `0x80200000`.
-Note the byte count printed by `load_image` — U-Boot does not set `${filesize}`
-after an OpenOCD load, so you will need it for the `sf write` command.
+OpenOCD can write RAM while the CPU is idle at the U-Boot prompt, so there is
+no need to halt or resume the processor.
 
-### 3c — Program NOR flash
+Record the byte count printed by `load_image`. Since the image was loaded by
+OpenOCD rather than U-Boot, the `${filesize}` environment variable is not set.
+You will need the reported byte count for the `sf write` command below.
 
-In the U-Boot console:
+### 3c — Program SPI NOR
 
-```
+At the U-Boot prompt:
+
+```text
 sf probe
 sf erase 0 0x40000
 sf write 0x80080000 0 0x<byte_count_hex>
 ```
 
-The erase covers 0x40000 (256 KB): the u-boot binary (0–0x2FFFF) and the env
-sector (0x30000–0x3FFFF). The env is erased intentionally — U-Boot writes it
-fresh on the first `saveenv`. The factory sector (0x40000, WiFi EEPROM) is
-deliberately excluded so that re-flashing does not destroy calibration data.
+The erase range covers the complete bootloader region:
+
+```
+0x00000–0x2FFFF   U-Boot image
+0x30000–0x3FFFF   Environment sector
+```
+
+The environment sector is intentionally erased; U-Boot recreates it on the
+first `saveenv`.
+
+The factory calibration sector beginning at **0x40000** is deliberately left
+untouched so that Wi-Fi EEPROM calibration data is preserved.
+
+If the bootloader image grows in future, increase the erase size so that the
+entire image is erased before programming.
 
 After a successful write, power-cycle the board.
 
 ### 3d — Verify NOR boot
 
-The MT7628 boot ROM reads SPI flash from offset 0 on power-up and runs the SPL.
+On power-up, the MT7628 boot ROM reads the SPI NOR flash beginning at offset
+0 and executes the SPL.
+
 The SPL:
 
-1. Initialises PLL and DRAM autonomously
-2. Locates U-Boot proper immediately after itself in NOR flash
-3. Decompresses the LZMA payload to `0x80200000` and jumps to it
+1. Initialises the PLL and DRAM.
+2. Loads U-Boot proper from its configured location in the SPI NOR image.
+3. Decompresses the LZMA payload to `0x80200000`.
+4. Transfers control to U-Boot.
 
-U-Boot console should appear on UART2 (TP19/TP20) at 115200 8N1 without any
-JTAG intervention.
+U-Boot should now appear on **UART2 (TP19/TP20)** at **115200 8N1** without any
+JTAG assistance.
 
-### 3e — Write and boot OpenWRT
+Successful boot confirms that:
 
-See [openwrt.md §4](openwrt.md#4--write-to-emmc) and [§5](openwrt.md#5--boot-configuration).
+- the SPL executes correctly,
+- DRAM initialisation succeeds,
+- the SPI NOR image layout is correct, and
+- U-Boot proper is loaded successfully.
+
+### 3e — Write and boot OpenWrt
+
+See [openwrt.md §4](openwrt.md#4--write-to-emmc) and
+[§5](openwrt.md#5--boot-configuration).

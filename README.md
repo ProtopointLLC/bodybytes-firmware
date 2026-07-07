@@ -7,9 +7,10 @@ SoC, 256 MB DDR2, 64 MB SPI NOR, 128 GB eMMC.
 
 | Path | Contents |
 |------|----------|
-| `openocd-scripts/` | MT7628 OpenOCD target scripts (`mt7628.cfg`, `mmio.tcl`, `memc.tcl`) |
 | `u-boot/` | U-Boot `v2026.04`, branch `bodybytes` — board support for MT7628AN |
 | `openwrt/` | OpenWRT `v25.12.4`, branch `bodybytes` — board target and DTS for bodybytes |
+
+The MT7628 OpenOCD target scripts (`mt7628.cfg`, `mmio.tcl`, `memc.tcl`) in `openocd/` are vendored from [mtk-openwrt/openocd-scripts](https://github.com/mtk-openwrt/openocd-scripts).
 
 Clone with submodules:
 
