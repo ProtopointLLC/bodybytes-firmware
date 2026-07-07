@@ -181,19 +181,21 @@ mdw 0xa0000000
 ### 2d — Set the work area
 
 ```tcl
-mt7628.cpu0 configure -work-area-phys 0xa0001000 -work-area-size 4096
+mt7628.cpu0 configure -work-area-phys 0xa0001000 -work-area-size 4096 -work-area-backup 0
 ```
 
-Lets OpenOCD use 4 KB at `0xa0001000` as scratch space for bulk operations such as `load_image`. Without this, transfers fall back to slow register-at-a-time writes.
+Lets OpenOCD use 4 KB at `0xa0001000` as scratch space for bulk operations such as `load_image`. Without this, transfers fall back to slow register-at-a-time writes. `-work-area-backup 0` skips saving and restoring the memory under the work area — safe here since `0xa0001000` is scratch RAM we own.
 
 ### Full sequence
 
 ```tcl
-reset halt
+targets
+reg pc  
 mdw 0xb0000010
+mdw 0x10000000
 cpu_pll_init
 dram_init 256
-mt7628.cpu0 configure -work-area-phys 0xa0001000 -work-area-size 4096
+mt7628.cpu0 configure -work-area-phys 0xa0001000 -work-area-size 4096 -work-area-backup 0
 mww 0xa0000000 0xdeadbeef
 mdw 0xa0000000
 ```
