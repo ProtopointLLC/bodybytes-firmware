@@ -73,7 +73,7 @@ Start OpenOCD:
 openocd -f interface/jlink.cfg \
     -c "transport select jtag" \
     -c "adapter speed 100" \
-    -c "reset_config trst_and_srst separate srst_nogate connect_assert_srst" \
+    -c "reset_config trst_and_srst separate srst_nogate  connect_assert_srst" \
     -f mt7628.cfg \
     -c "init" \
     -c "reset halt" \
