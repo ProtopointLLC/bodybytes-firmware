@@ -1,7 +1,3 @@
-[submodule "openocd-scripts"]
-	path = openocd-scripts
-	url = https://github.com/mtk-openwrt/openocd-scripts.git
-	branch = main
 [submodule "u-boot"]
 	path = u-boot
 	url = https://github.com/ProtopointLLC/bodybytes-u-boot.git
