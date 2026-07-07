@@ -194,13 +194,14 @@ reg pc
 mdw 0xb0000010
 mdw 0x10000000
 cpu_pll_init
+adapter speed 1000
 dram_init 256
 mt7628.cpu0 configure -work-area-phys 0xa0001000 -work-area-size 4096 -work-area-backup 0
 mww 0xa0000000 0xdeadbeef
 mdw 0xa0000000
 ```
 
-After the last command prints `deadbeef`, the board is initialized and ready to load code.
+After the last command prints `deadbeef`, the board is initialized and ready to load code. If you are testing with a VoCore2, use `dram_init 128` instead.
 
 ---
 
