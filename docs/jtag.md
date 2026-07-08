@@ -27,11 +27,13 @@ Reference: <https://kb.segger.com/9-pin_JTAG/SWD_connector>
 |-----------|--------|------------|-------------|----------------|------------|
 | 1 (top)   | Red    | TP21       | VTref       | VTref          | 1          |
 | 2         | Orange | TP22       | GND         | GND            | 3 or 5     |
-| 3         | Yellow | TP18       | RESET_N     | nRESET         | 10         |
+| 3         | Yellow | TP18       | JTRST\_N    | nTRST          | 9          |
 | 4         | Green  | TP17       | TCK         | SWCLK          | 4          |
 | 5         | Blue   | TP16       | TMS         | SWDIO          | 2          |
 | 6         | Violet | TP15       | TDI         | NC             | 8          |
 | 7 (bot)   | White  | TP14       | TDO         | SWO            | 6          |
+
+J-Link pin 10 (nRESET) is not connected — bodybytes does not expose PORST\_N on the JTAG header.
 
 VTref (TP21) is a sense input — connect it to the 3.3 V rail but do not use it to power the board.
 
@@ -39,22 +41,21 @@ The MT7628 JTAG pins are multiplexed with Ethernet LED functions. The board must
 
 ## Reset Signals
 
-Two active-low reset lines are wired to the connector:
+Only JTRST\_N is connected to the JTAG header on bodybytes. PORST\_N (system reset) is not wired to the JTAG connector.
 
 | Signal | Board net | J-Link pin | What it resets |
 |--------|-----------|------------|----------------|
 | TRST (nTRST) | `JTAG_TRST` / `JTRST_N` | 9 | JTAG/EJTAG TAP and debug logic only |
-| SRST (nRESET) | `RESET` / `PORST_N` | 10 | Entire SoC |
 
-TRST resets only the JTAG TAP state machine and debug logic — it does not reset the CPU or peripherals. SRST/PORST_N resets the entire MT7628 and returns the CPU to the boot entry point. Both lines have pull-ups on this board.
+TRST resets the JTAG TAP state machine and debug logic only — it does not reset the CPU or peripherals. Without PORST\_N, OpenOCD cannot force a clean CPU reset. Connect after power-on and use `halt` to stop the running CPU.
 
-The working OpenOCD reset configuration is:
+The OpenOCD reset configuration for bodybytes:
 
 ```tcl
-reset_config trst_and_srst separate srst_nogate connect_assert_srst
+reset_config trst_only
 ```
 
-`connect_assert_srst` holds SRST asserted when OpenOCD connects, keeping the system in reset while the JTAG TAP initializes. `srst_nogate` keeps TCK running during SRST so OpenOCD can communicate with the TAP and set the `EJTAGBOOT` instruction before releasing SRST. When SRST releases, the CPU starts with EJTAGBOOT active and enters the EJTAG debug ROM, halting before its first instruction.
+With `trst_only`, OpenOCD resets only the TAP when `reset` is issued. The CPU is not affected. Use `halt` (not `reset halt`) to stop the CPU after `init`.
 
 ---
 
@@ -73,12 +74,14 @@ Start OpenOCD:
 openocd -f interface/jlink.cfg \
     -c "transport select jtag" \
     -c "adapter speed 100" \
-    -c "reset_config trst_and_srst separate srst_nogate  connect_assert_srst" \
+    -c "reset_config trst_only" \
     -f mt7628.cfg \
     -c "init" \
-    -c "reset halt" \
-    -c "wait_halt 10000"
+    -c "halt" \
+    -c "wait_halt 5000"
 ```
+
+`trst_only` — bodybytes has no PORST\_N on the JTAG connector. OpenOCD can reset the TAP (JTRST\_N) but not the SoC. Power the board first, then connect OpenOCD. `halt` sends a debug request to the running CPU rather than forcing it to a clean reset entry point.
 
 Expected output:
 
@@ -86,9 +89,8 @@ Expected output:
 jtag
 adapter speed: 100 kHz
 
-trst_and_srst separate srst_nogate trst_push_pull srst_open_drain connect_assert_srst
+trst_only
 
-dram_init
 Info : J-Link EDU Mini V2 compiled Dec 10 2025 15:50:17
 Info : Hardware version: 2.00
 Info : VTarget = 3.316 V
@@ -96,13 +98,9 @@ Info : clock speed 100 kHz
 Info : JTAG tap: mt7628.cpu tap/device found: 0x1762824f (mfg: 0x127 (MIPS Technologies), part: 0x7628, ver: 0x1)
 Info : starting gdb server for mt7628.cpu0 on 3333
 Info : Listening on port 3333 for gdb connections
-Error: isa info not available, failed to read cp0 config register: 0
-target halted in MIPS32 mode due to undefined, pc: 0x00000000
-Info : JTAG tap: mt7628.cpu tap/device found: 0x1762824f (mfg: 0x127 (MIPS Technologies), part: 0x7628, ver: 0x1)
-Error: isa info not available, failed to read cp0 config register: 0
-target halted in MIPS32 mode due to debug-request, pc: 0x00000000
 Info : Listening on port 6666 for tcl connections
 Info : Listening on port 4444 for telnet connections
+target halted in MIPS32 mode due to debug-request, pc: 0x9c...
 ```
 
 ### Verify halt state via telnet
@@ -120,13 +118,13 @@ telnet localhost 4444
  0* mt7628.cpu0        mips_m4k   little mt7628.cpu         halted
 
 > reg pc
-pc (/32): 0x9c000001
+pc (/32): 0x9c...    (somewhere in NOR or RAM, depending on where boot reached)
 
 > mdw 0x10000000
 0x10000000: 3637544d
 ```
 
-A clean `reset halt` leaves the CPU at `0x9c000000` — the SPI NOR boot window at physical `0x1c000000` via the MIPS KSEG0 cached alias. The chip ID register at `0x10000000` reads `0x3637544d` ("MT76").
+Without PORST\_N, `halt` catches the CPU wherever it was executing — mid-U-Boot, mid-SPL, or in the BROM. The PC value is unpredictable but `mdw 0x10000000` should always read `0x3637544d` ("MT76") confirming the SoC is alive. Proceed with `cpu_pll_init` and `dram_init 256` regardless of where the CPU halted — those scripts are idempotent.
 
 ---
 
@@ -190,7 +188,7 @@ Lets OpenOCD use 4 KB at `0xa0001000` as scratch space for bulk operations such 
 
 ```tcl
 targets
-reg pc  
+reg pc
 mdw 0xb0000010
 mdw 0x10000000
 cpu_pll_init
@@ -201,13 +199,13 @@ mww 0xa0000000 0xdeadbeef
 mdw 0xa0000000
 ```
 
-After the last command prints `deadbeef`, the board is initialized and ready to load code. If you are testing with a VoCore2, use `dram_init 128` instead.
+After the last command prints `deadbeef`, the board is initialized and ready to load code.
 
 ---
 
 ## Step 3 — Load and Run U-Boot
 
-Continue with [uboot.md §3a](uboot.md#3a--bootstrap-and-smoke-test).
+Continue with [flashing.md §4a](flashing.md#4a--bootstrap-via-jtag-and-smoke-test-u-boot).
 
 ---
 
@@ -215,7 +213,7 @@ Continue with [uboot.md §3a](uboot.md#3a--bootstrap-and-smoke-test).
 
 | Region | Interface | Size | Contents |
 |--------|-----------|------|----------|
-| SPI NOR | SPI bus 0 | 64 MB | U-Boot at 0x0, env at 0x30000, WiFi EEPROM at 0x40000 |
+| SPI NOR | SPI bus 0 | 64 MB | U-Boot at 0x000000, env at 0x040000, WiFi EEPROM at 0x050000, recovery at 0x060000 |
 | eMMC | SDXC / MMC | 128 GB | OS kernel + rootfs from sector 0, remaining space for data |
 
 SPI NOR is at physical `0x1c000000`, accessible to the CPU at `0x9c000000` (KSEG0 cached) or `0xbc000000` (KSEG1 uncached).
@@ -232,5 +230,5 @@ SPI NOR is at physical `0x1c000000`, accessible to the CPU at `0x9c000000` (KSEG
 | `tap: mt7628.cpu enabled (idcode 0x00000000)` | TDO open, target unpowered, or TAP held in reset |
 | `halt` times out | CPU may be held in reset, JTAG mode may not be strapped, or EJTAG pins muxed to LEDs |
 | `targets` shows `running` after a previous clean halt | Check for GDB/IDE resume, external reset, watchdog, or stale register reads |
-| PC remains `0x9c000000` after `resume; sleep 100; halt` | CPU not progressing from reset entry — check PORST_N, clock, SPI flash activity, and boot straps |
-| Explicit `trst_open_drain` or `trst_push_pull srst_open_drain` fails | Use the known-good implicit mode: `reset_config trst_and_srst separate srst_nogate connect_assert_srst` |
+| PC remains `0x9c000000` after `resume; sleep 100; halt` | CPU not progressing from NOR entry — check clock, SPI flash activity, and boot straps |
+| `halt` times out after `init` | Board not powered, JTAG mode not strapped (TXD1 must be low), or EPHY LED pins not muxed to JTAG |

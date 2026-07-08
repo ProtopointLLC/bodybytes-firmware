@@ -19,6 +19,7 @@
             export OPENOCD_SCRIPTS="$PWD/openocd"
             export CROSS_COMPILE=mipsel-unknown-linux-gnu-
             export ARCH=mips
+            unset SOURCE_DATE_EPOCH
           '';
 
           buildInputs = with pkgs; [
@@ -61,6 +62,7 @@
             export NIX_CFLAGS_COMPILE="-I/usr/include"
             export NIX_LDFLAGS="-L/usr/lib"
             export NIX_HARDENING_ENABLE=""
+            export LD_LIBRARY_PATH="/usr/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           '';
         }).env;
 

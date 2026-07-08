@@ -63,7 +63,7 @@ The first compatible string is the board-specific identifier OpenWRT uses for bo
 chosen { bootargs = "console=ttyS2,115200"; }
 ```
 
-UART2 = ttyS2. UART2 is wired to EPHY MDI_P2 pads (MDI_TP_P2 / MDI_TN_P2, SoC pins 47/48) via the AGPIO_CFG UART2_MODE=0 path set by the SPL. The kernel does not touch that register, so the routing persists from boot. `ephy-digital` (see below) re-asserts the EPHY pad digital-mode bit on every kernel init.
+UART2 = ttyS2. UART2 is routed to EPHY MDI_P2 pads (MDI_TP_P2 / MDI_TN_P2, SoC pins 47/48): `uart2_pins` sets `UART2_MODE=0`; `ephy-digital` (see below) sets `AGPIO_CFG EPHY_GPIO_AIO_EN[4:1]=0xf` at pinctrl probe time, switching those pads from analog to digital mode.
 
 #### SPI NOR flash — `&spi0`
 
@@ -71,13 +71,14 @@ W25Q512JV, 64 MB, CS0, 25 MHz. The OS lives on eMMC; NOR holds only the bootload
 
 | Partition | Offset | Size | Notes |
 |-----------|--------|------|-------|
-| `u-boot` | `0x000000` | 192 KB | read-only |
-| `u-boot-env` | `0x030000` | 64 KB | writable |
-| `factory` | `0x040000` | 64 KB | read-only; contains WiFi EEPROM at offset 0 |
+| `u-boot` | `0x000000` | 256 KB | read-only |
+| `u-boot-env` | `0x040000` | 64 KB | writable |
+| `factory` | `0x050000` | 64 KB | read-only; 1 KB WiFi EEPROM at offset 0 |
+| `recovery` | `0x060000` | 63.625 MB | read-only; OpenWrt sysupgrade image |
 
-The `factory` partition exposes a 1 KB nvmem cell (`eeprom@0`) consumed by `&wmac` for WiFi calibration data. Without this partition the wireless interface will not initialize.
+The `factory` partition exposes a 1 KB nvmem cell (`eeprom@0`) consumed by `&wmac`. If the partition is erased (all 0xFF) the driver falls back to the on-chip eFuse automatically. See `scripts/generate_nor_image.py` for how to build a factory blob with a custom MAC.
 
-The kernel MTD spi-nor driver handles BAR (Bank Address Register) addressing for the upper 48 MB automatically — no special DTS flag is needed.
+The kernel MTD spi-nor driver handles BAR (Bank Address Register) addressing for the W25Q512JV's four 16 MB regions automatically — no special DTS flag is needed.
 
 #### Pin control — `&pinctrl`
 
@@ -118,13 +119,17 @@ Kingston EMMC128-IY29-5B111, 128 GB eMMC 5.1, on EPHY P3/P4 MDI pads (SoC pins 5
 
 `cap-mmc-highspeed`, `bus-width = <4>`, and `no-1-8-v` are inherited from `mt7628an.dtsi`. High Speed SDR mode (≤52 MHz, ≤52 MB/s) is the fastest mode the MT7628 SDXC controller supports at 3.3 V VCCQ; HS200/HS400 require 1.8 V and are unreachable regardless.
 
+#### Ethernet — `&ethernet` / `&esw`
+
+Both disabled. Bodybytes has no physical Ethernet ports; the MT7628 internal switch is unused.
+
 #### UART2 — `&uart2`
 
 ```dts
 &uart2 { status = "okay"; };
 ```
 
-Enables the UART2 peripheral (ttyS2). Pin routing to EPHY MDI_P2 is handled at the register level by the SPL and `ephy-digital`; the standard `uart2_pins` pinctrl only touches `GPIO_MODE` and does not override the AGPIO_CFG routing.
+Enables the UART2 peripheral (ttyS2). `uart2_pins` (from `mt7628an.dtsi`) sets `UART2_MODE=0`; `ephy-digital` sets `AGPIO_CFG` to make the MDI P2 pads digital. Both are applied at pinctrl probe.
 
 #### WiFi — `&wmac`
 
@@ -132,10 +137,13 @@ Enables the UART2 peripheral (ttyS2). Pin routing to EPHY MDI_P2 is handled at t
 &wmac {
     nvmem-cells = <&eeprom_factory_0>;
     nvmem-cell-names = "eeprom";
+    mediatek,eeprom-merge-otp;
 };
 ```
 
-Points the MT7628 integrated 2.4 GHz radio at the 1 KB calibration EEPROM in the NOR `factory` partition. Without this the driver loads with a zeroed EEPROM and RF performance is undefined.
+Points the MT7628 integrated 2.4 GHz radio at the 1 KB EEPROM in the `factory` partition. `mediatek,eeprom-merge-otp` tells the mt7603 driver to overlay RF calibration fields (TX power, RSSI offsets, crystal trim) from the on-chip eFuse over the external EEPROM. This means only the chip ID and MAC address need to be present in the factory partition; all RF fields can be zero and the eFuse values fill them in.
+
+If the factory partition is entirely erased (all 0xFF) the driver discards the external EEPROM and copies the eFuse wholesale, including whatever MAC MediaTek burned into the chip. The `eeprom-merge-otp` property has no effect in that case.
 
 ### Board profile
 
@@ -177,55 +185,6 @@ The sysupgrade image is a raw image: uImage (lzma-compressed kernel + DTB) follo
 
 ---
 
-## 4 — Write to eMMC
+## 4 — Flash
 
-Pre-calculate the block count on the host (512 bytes per block):
-
-```sh
-img=openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
-blkcount=$(( ($(stat -c%s "$img") + 511) / 512 ))
-printf "block count: 0x%x\n" $blkcount
-```
-
-Load the image into RAM via OpenOCD, then write to eMMC from the U-Boot console.
-
-**Load via OpenOCD** (from the telnet session while U-Boot is running):
-
-```tcl
-halt
-load_image openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin 0x82000000 bin
-resume
-```
-
-`0x82000000` keeps the image above U-Boot's footprint regardless of image size. Note the byte count from `load_image`.
-
-**Write to eMMC** (in the U-Boot console):
-
-```
-mmc dev 0
-mmc write 0x82000000 0 <block_count_hex>
-```
-
-Alternatively, once networking is up, TFTP is more practical for large images:
-
-```
-setenv ipaddr 192.168.1.1
-setenv serverip 192.168.1.100
-tftpboot 0x82000000 openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
-mmc dev 0
-mmc write 0x82000000 0 <block_count_hex>
-```
-
----
-
-## 5 — Boot configuration
-
-Set `bootcmd` once from the U-Boot console:
-
-```
-setenv bootcmd 'mmc dev 0; mmc read 0x82000000 0 0x10000; bootm 0x82000000'
-saveenv
-boot
-```
-
-The kernel command line (rootfs location, overlayfs) depends on the exact OpenWRT image layout and will be refined once a first boot is achieved. The `bootargs` in the DTS (`console=ttyS2,115200`) is a baseline; U-Boot can extend it via `setenv bootargs`.
+See [flashing.md](flashing.md) for NOR image assembly, factory EEPROM generation, SPI NOR programming, eMMC write, and boot configuration.
