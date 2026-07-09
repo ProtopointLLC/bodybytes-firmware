@@ -214,7 +214,7 @@ Continue with [flashing.md §4a](flashing.md#4a--bootstrap-via-jtag-and-smoke-te
 | Region | Interface | Size | Contents |
 |--------|-----------|------|----------|
 | SPI NOR | SPI bus 0 | 64 MB | U-Boot at 0x000000, env at 0x040000, WiFi EEPROM at 0x050000, recovery at 0x060000 |
-| eMMC | SDXC / MMC | 128 GB | OS kernel + rootfs from sector 0, remaining space for data |
+| eMMC | SDXC / MMC | 128 GB | 4-partition GPT: `kernel` (32 MB, raw), `rootfs` (512 MB, squashfs), `rootfs_data` (4 GB, ext4 overlay), `data` (remainder, ext4) — see [flashing.md §5a](flashing.md#5a--gpt-partition-layout) |
 
 SPI NOR is at physical `0x1c000000`, accessible to the CPU at `0x9c000000` (KSEG0 cached) or `0xbc000000` (KSEG1 uncached).
 

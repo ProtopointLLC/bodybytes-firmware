@@ -1,6 +1,6 @@
 # Flashing — MT7628AN / Bodybytes
 
-Prerequisites: U-Boot built ([uboot.md](uboot.md)), OpenWrt built ([openwrt.md](openwrt.md)), JTAG connected ([jtag.md](jtag.md)).
+Prerequisites: U-Boot built ([uboot.md](uboot.md)), OpenWrt built ([openwrt.md](openwrt.md)). §4 additionally requires JTAG connected ([jtag.md](jtag.md)).
 
 ---
 
@@ -192,7 +192,7 @@ sf erase 0 0x50000
 sf write 0x80080000 0 0x<byte_count_hex>
 ```
 
-This erases u-boot + env (preserving factory at `0x050000`) and writes the new binary. The env partition is erased — run `saveenv` at the U-Boot prompt on the next boot to restore compiled-in defaults, or load a fresh `assets/bodybytes_nor_image.bin` and re-program the env sector: `sf erase 0x40000 0x10000; sf write 0x80040000 0x40000 0x1000`. Power-cycle to boot from the updated NOR.
+This erases u-boot + env (preserving factory at `0x050000`) and writes the new binary. The env partition is erased — run `saveenv` at the U-Boot prompt on the next boot to write the compiled-in defaults back to flash. Power-cycle to boot from the updated NOR.
 
 ### 4d — Verify NOR boot
 

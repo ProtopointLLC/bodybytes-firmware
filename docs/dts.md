@@ -283,7 +283,7 @@ These nodes are absent from U-Boot DTBs as U-Boot does not need them:
 
 ## 13 — Root cause summary
 
-bodybytes `u-boot.bin` loaded via JTAG (bypassing the SPL) produces no serial output because:
+Before the §7 fix, bodybytes `u-boot.bin` loaded via JTAG (bypassing the SPL) produced no serial output because:
 
 1. After `reset halt`, all SoC registers are in reset state: `AGPIO_CFG = 0` → MDI P2 pads in **analog EPHY mode**.
 2. The JTAG load goes directly to `u-boot.bin` at `0x80200000`. The SPL (`u-boot-spl.bin`) does not run.
@@ -295,20 +295,8 @@ VoCore2's stock Linux works because the stock VoCore2 U-Boot runs the SPL before
 
 ---
 
-## 14 — Fix and VoCore2 compatibility
+## 14 — VoCore2 compatibility
 
-**Change in `u-boot/arch/mips/dts/bodybytes,bodybytes.dts`:**
+The fix is idempotent: when booting from NOR flash, the SPL sets `AGPIO_CFG[20:17] = 0xf` before U-Boot proper starts; DM re-applies the same bits via `ephy_iot_mode` at uart2 probe. No conflict.
 
-Override uart2 to add `ephy_iot_mode` to its `pinctrl-0`. DM then applies both pinctrl states when uart2 is probed (pre-relocation):
-- `uart2_pins`: sets `GPIO_MODE1[27:26] = 0` → `UART2_MODE=0` → MDI P2 pads
-- `ephy_iot_mode`: sets `AGPIO_CFG[20:17] = 0xf` → all EPHY pads digital; also enables internal EPHY0
-
-This is idempotent when the SPL runs first (SPL sets the same bits; DM re-applies them).
-
-After this fix, bodybytes `u-boot.bin` loaded via JTAG will produce UART2 output on:
-- **Bodybytes hardware**: TP20 (TX) and TP19 (RX)
-- **VoCore2 + breakout board**: P2TP (TX) and P2TN (RX) on the 10-pin MDI header — MDI\_TP\_P2 / MDI\_TN\_P2
-
-Note: stock VoCore2 firmware routes its UART2 console to P1RP/P1RN (a different mux path). Move the USB-serial adapter wires when switching between stock VoCore2 firmware and bodybytes U-Boot on the same hardware.
-
-**eMMC on VoCore2:** With `non-removable` and no eMMC connected, the MMC driver times out on probe (≈1–2 s), emits an error, and U-Boot continues normally. This is acceptable for development testing. The bodybytes-specific MMC pinctrl (`sd_iot_mode`, `mdi_p1_gpio`) and `mmc-pwrseq` are harmless on VoCore2 hardware.
+**eMMC on VoCore2:** With `non-removable` and no eMMC connected, the MMC driver times out on probe (≈1–2 s), emits an error, and U-Boot continues normally. The bodybytes MMC pinctrl (`sd_iot_mode`, `mdi_p1_gpio`) and `mmc-pwrseq` are harmless on VoCore2 hardware.

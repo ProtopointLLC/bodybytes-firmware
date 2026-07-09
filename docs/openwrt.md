@@ -1,45 +1,14 @@
 # OpenWRT — MT7628AN
 
-Target: `ramips` / subtarget `mt76x8`
+Target: `ramips` / subtarget `mt76x8` — see [building.md](building.md) for build steps.
 
 ---
 
-## 1 — Prerequisites
+## 1 — Board files
 
-### Build environment
+`bodybytes.config` (at the repo root) seeds the target/board selection and board-specific Kconfig options. `CONFIG_EMMC_SUPPORT=y` ensures `emmc.sh` is included in the base-files package without affecting other mt76x8 boards.
 
-OpenWRT **builds its own MIPS cross-compiler** from source. Do not use the U-Boot `nix develop .#uboot` shell — it sets `CROSS_COMPILE` and `ARCH` which would interfere.
-
-```sh
-cd /path/to/bodybytes
-nix develop .#openwrt
-```
-
-This drops into a `buildFHSEnv` shell that provides all required host tools without setting any cross-compilation variables. It also sets `AR=gcc-ar` (LTO-aware archiver for host builds) and `FAKEROOTDONTTRYCHOWN=1` (works around a fakeroot/bwrap user-namespace limitation that would otherwise produce ownership warnings and a non-zero exit during image assembly).
-
-### Update feeds
-
-```sh
-cd openwrt
-./scripts/feeds update -a
-./scripts/feeds install -a
-```
-
----
-
-## 2 — Configure
-
-```sh
-cd openwrt
-cp ../bodybytes.config .config
-make defconfig
-```
-
-`bodybytes.config` seeds the target/board selection and board-specific Kconfig options (`CONFIG_EMMC_SUPPORT=y` ensures `emmc.sh` is included in the base-files package without affecting other mt76x8 boards). `make defconfig` expands it into a full `.config` with all defaults filled in. To add or change packages, run `make menuconfig` afterwards.
-
-### Board files
-
-All files below live in the `openwrt/` submodule; the submodule is pinned to a commit that includes these changes. `bodybytes.config` at the repo root seeds the OpenWrt `.config` — see §2.
+All files below live in the `openwrt/` submodule; the submodule is pinned to a commit that includes these changes.
 
 | File | Purpose |
 |------|---------|
@@ -148,7 +117,7 @@ Enables the UART2 peripheral (ttyS2). `uart2_pins` (from `mt7628an.dtsi`) sets `
 
 Points the MT7628 integrated 2.4 GHz radio at the 1 KB EEPROM in the `factory` partition. `mediatek,eeprom-merge-otp` tells the mt7603 driver to overlay RF calibration fields (TX power, RSSI offsets, crystal trim) from the on-chip eFuse over the external EEPROM. This means only the chip ID and MAC address need to be present in the factory partition; all RF fields can be zero and the eFuse values fill them in.
 
-If the factory partition is entirely erased (all 0xFF) the driver discards the external EEPROM and copies the eFuse wholesale, including whatever MAC MediaTek burned into the chip. The `eeprom-merge-otp` property has no effect in that case.
+If the factory partition is entirely erased (all 0xFF) the driver discards the external EEPROM and copies the eFuse wholesale, including whatever MAC MediaTek burned into the chip (often `0xFF:FF:FF:FF:FF:FF` on engineering samples). Always write a valid factory blob with your own MAC.
 
 ### Board profile
 
@@ -178,35 +147,7 @@ TARGET_DEVICES += bodybytes_bodybytes
 
 ---
 
-## 3 — Build
-
-All commands run from inside `openwrt/`.
-
-```sh
-make download
-make world -j$(nproc)
-```
-
-The first build downloads the MIPS cross-toolchain and all package sources and takes a while; subsequent builds are incremental. `make world` also performs smaller downloads on each run.
-
-### Output
-
-```
-bin/targets/ramips/mt76x8/
-  openwrt-ramips-mt76x8-bodybytes_bodybytes-initramfs-kernel.bin
-  openwrt-ramips-mt76x8-bodybytes_bodybytes-recovery.bin
-  openwrt-ramips-mt76x8-bodybytes_bodybytes-sysupgrade.bin
-```
-
-Three images are produced:
-
-| Image | Purpose |
-|-------|---------|
-| `initramfs-kernel.bin` | Raw initramfs kernel image produced by the `KERNEL_INITRAMFS` build path. Intermediate artifact; consumed by `recovery.bin`. |
-| `recovery.bin` | Same content as `initramfs-kernel.bin`, explicitly declared as an `IMAGES` output via `append-image-stage`. Written to the NOR `recovery` partition at `0x060000`. `scripts/generate_nor_image.py` references this file. |
-| `sysupgrade.bin` | Sysupgrade tar (with appended metadata) containing the regular kernel (`sysupgrade-*/kernel`) and squashfs rootfs (`sysupgrade-*/root`). Used for initial eMMC provisioning (via reader board or JTAG) and for OTA updates via the OpenWrt web UI or `sysupgrade` command. |
-
-### Sysupgrade
+## 2 — Sysupgrade
 
 `openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh` dispatches `sysupgrade` per board name. The bodybytes case:
 
@@ -243,9 +184,3 @@ The `init.d/bootcount` script (START=99) runs near the end of every successful O
 The default fallback (`default_do_upgrade`) writes to an MTD partition named `firmware`, which does not exist on bodybytes. Without the bodybytes case, sysupgrade would fail at runtime.
 
 See [uboot.md — Boot counter](uboot.md#boot-counter-failed-boot-recovery) for the U-Boot side of this mechanism.
-
----
-
-## 4 — Flash
-
-See [flashing.md](flashing.md) for NOR image assembly (including factory EEPROM generation and recovery partition programming), SPI NOR programming, eMMC layout, and boot configuration (including recovery trigger and bootcmd).
