@@ -171,13 +171,11 @@ Both use the legacy 4-bit data interface (SD\_D0–D3). 8-bit eMMC mode is not u
 |-|-----------------------|------------------------|
 | Device | Hardkernel 32 GB eMMC module (H2) | Kingston EMMC128-IY29-5B111 (128 GB) |
 | Connection | eMMC module → Hardkernel eMMC Module Reader Board → Adafruit 4682 microSD breakout → jumper wires to breakout connector | Soldered directly on board |
-| RST\_n | Not connected | Wired to MDI\_TN\_P1 (GPIO#15) |
+| RST\_n | Reader board R1 tap → MDI\_TN\_P1 (GPIO#15) | Wired to MDI\_TN\_P1 (GPIO#15) |
 
 The microSD breakout must expose all four data lines (D0–D3), CMD, and CLK — a **4-bit SDIO-capable** breakout is required. SPI-only breakouts (which expose only D0/MISO, CLK, CMD/MOSI, CS) will not work. The Adafruit 4682 exposes the full SDIO bus and is the tested choice.
 
-The Hardkernel reader board has a small pull-up resistor **R1** on RST\_n. RST\_n is not broken out to a dedicated pin, but the R1 pads are accessible and a bridge wire soldered across them can tap the signal. Connect one side of R1 to MDI\_TN\_P1 (GPIO#15) on the breakout to achieve full pin parity with the bodybytes hardware setup.
-
-If RST\_n is not wired, this is fine for normal operation — RST\_n is disabled by default in eMMC (`EXT_CSD[162] = 0x00`) and pulsing it is a no-op. See [openwrt.md](openwrt.md) for the DTS `emmc_pwrseq` node discussion.
+The Hardkernel reader board has a small pull-up resistor **R1** on RST\_n. RST\_n is tapped from the R1 pads with a bridge wire and connected to MDI\_TN\_P1 (GPIO#15) on the breakout, giving full pin parity with the bodybytes hardware setup. See [openwrt.md](openwrt.md) for the DTS `emmc_pwrseq` node discussion.
 
 ### eMMC manufacturing from PC
 
