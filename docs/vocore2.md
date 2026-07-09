@@ -209,9 +209,57 @@ Partition 1 holds the raw kernel binary; partition 2 holds the squashfs rootfs (
 
 ## NOR Flash
 
-VoCore2 uses a 32 MB W25Q256 NOR with a different partition layout than bodybytes. When testing bodybytes U-Boot on VoCore2, the SPI NOR commands will work but the partition offsets differ from the VoCore2 stock layout. The bodybytes `generate_nor_image.py` output cannot be written verbatim to a stock VoCore2 NOR without replacing the entire flash contents.
+VoCore2 uses a 32 MB W25Q256. The partition offsets (u-boot at `0x0`, u-boot-env at `0x40000`, factory at `0x50000`, recovery at `0x60000`) are identical to bodybytes; only the total NOR size and the recovery partition end differ. `generate_nor_image.py --nor-size 32` produces a 32 MB image with the recovery partition capped at `0x1FA0000` (31.625 MB) instead of 63.625 MB. The actual recovery kernel is far smaller than either limit.
 
-For JTAG RAM-boot development, this is not relevant — `u-boot.bin` is loaded directly to RAM and never touches NOR.
+The recovery boot path (`altbootcmd=run bootcmd_recovery`, `bootcmd_recovery=bootm 0xBC060000`) reads the kernel directly from the NOR memory-mapped window — it does not use `sf read` and does not care about the DTS partition size.
+
+**OpenWRT MTD note:** The OpenWRT DTS defines the `recovery` partition with size `0x3FA0000` (63.625 MB), which extends to the 64 MB boundary. On VoCore2 the kernel spi-nor driver detects the W25Q256 as 32 MB, so the MTD layer rejects or truncates the `recovery` partition with a warning. The `u-boot`, `u-boot-env`, and `factory` partitions (all within the first 384 KB) register correctly. The truncated `recovery` MTD is harmless in practice: OpenWRT never writes to it (it is `read-only` in the DTS and is only ever written by U-Boot via `sf`), and `fw_setenv`/`fw_printenv` use `u-boot-env` which is unaffected.
+
+### Recovery testing on VoCore2
+
+**Before making any changes, dump the stock NOR** (see §Dumping the stock NOR image below) so you can restore VoCore2 to its original state afterwards.
+
+**1 — Build the NOR image:**
+
+```sh
+python3 scripts/generate_nor_image.py --nor-size 32 XX:XX:XX:XX:XX:XX
+```
+
+Output: `assets/vocore2_nor_image.bin` (32 MB).
+
+**2 — Load the image into RAM via JTAG/OpenOCD:**
+
+```tcl
+# OpenOCD telnet (bodybytes U-Boot already RAM-booted via openocd_run_uboot_vocore2.scr)
+halt
+load_image assets/vocore2_nor_image.bin 0x80000000 bin
+resume
+```
+
+**3 — Write to NOR from the U-Boot prompt:**
+
+```
+sf probe
+sf erase 0 0x2000000
+sf write 0x80000000 0 0x2000000
+```
+
+**4 — Test recovery:**
+
+Trigger recovery by simulating a bootcount overflow (or hold the recovery button during reset):
+
+```
+fw_setenv upgrade_available 1
+fw_setenv bootcount 4
+fw_setenv bootlimit 3
+reset
+```
+
+U-Boot will run `altbootcmd` → `bootm 0xBC060000` and boot the recovery initramfs from NOR.
+
+**5 — Restore stock NOR** when done (see §Restoring the stock NOR image below).
+
+For JTAG RAM-boot development that does not exercise the recovery path, NOR is not involved — `u-boot.bin` is loaded directly to RAM.
 
 ### Dumping the stock NOR image
 
