@@ -13,7 +13,7 @@ Breakout board: <https://github.com/stargate01/vocore2-breakout>
 | RAM | 128 MB DDR2 | 256 MB DDR2 |
 | NOR flash | 32 MB W25Q256 | 64 MB W25Q512JV |
 | PORST\_N on JTAG connector | Yes (J6 pin 10) | Not connected |
-| eMMC | None | 128 GB Kingston EMMC128-IY29-5B111 |
+| eMMC | 32 GB Hardkernel H2 via reader board + Adafruit 4682 breakout | 128 GB Kingston EMMC128-IY29-5B111 |
 | Recovery trigger | Push button to GND on MDI\_TP\_P1 | TI DRV5032FCDBZT hall-effect sensor on MDI\_TP\_P1 |
 | UART2 TX — bodybytes U-Boot | P2TP (breakout connector) | TP20 (test point) |
 | UART2 RX — bodybytes U-Boot | P2TN (breakout connector) | TP19 (test point) |
@@ -22,7 +22,7 @@ Breakout board: <https://github.com/stargate01/vocore2-breakout>
 
 ### eMMC on VoCore2
 
-bodybytes U-Boot has the eMMC node enabled with `non-removable`. Without an eMMC connected, the MMC driver probes, times out (≈1–2 s), emits an error, and continues. This is harmless for development.
+The Hardkernel H2 eMMC module connects via the reader board → Adafruit 4682 microSD breakout → jumper wires to the breakout connector. See §eMMC / SD Card below for the full wiring table and setup notes.
 
 ### Recovery trigger on VoCore2
 
