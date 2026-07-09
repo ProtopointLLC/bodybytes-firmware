@@ -11,9 +11,10 @@ Breakout board: <https://github.com/stargate01/vocore2-breakout>
 | Parameter | VoCore2 | Bodybytes |
 |-----------|---------|-----------|
 | RAM | 128 MB DDR2 | 256 MB DDR2 |
-| NOR flash | 16 MB | 64 MB W25Q512JV |
+| NOR flash | 32 MB W25Q256 | 64 MB W25Q512JV |
 | PORST\_N on JTAG connector | Yes (J6 pin 10) | Not connected |
 | eMMC | None | 128 GB Kingston EMMC128-IY29-5B111 |
+| Recovery trigger | Push button to GND on MDI\_TP\_P1 | TI DRV5032FCDBZT hall-effect sensor on MDI\_TP\_P1 |
 | UART2 TX — bodybytes U-Boot | P2TP (breakout connector) | TP20 (test point) |
 | UART2 RX — bodybytes U-Boot | P2TN (breakout connector) | TP19 (test point) |
 | UART2 TX — stock VoCore2 firmware | TXD2 / P1RP (breakout connector) | N/A |
@@ -22,6 +23,12 @@ Breakout board: <https://github.com/stargate01/vocore2-breakout>
 ### eMMC on VoCore2
 
 bodybytes U-Boot has the eMMC node enabled with `non-removable`. Without an eMMC connected, the MMC driver probes, times out (≈1–2 s), emits an error, and continues. This is harmless for development.
+
+### Recovery trigger on VoCore2
+
+On bodybytes, MDI\_TP\_P1 (SoC pin 40, GPIO#14) connects to a TI DRV5032FCDBZT hall-effect sensor. On VoCore2, replace this with a **push button to GND** on the same pin.
+
+MDI\_TP\_P1 is the **PWM0** pad on the VoCore2 module. It is not broken out on the main connector row — it appears as a pad contact on the **second row** of the VoCore2 module footprint and requires a pin header to be soldered to access it. Once accessible, connect a normally-open button between this pad and GND. The board DTS configures a pull-up via `mdi_p1_gpio`; pressing the button pulls GPIO#14 low and triggers recovery boot.
 
 ---
 
@@ -140,16 +147,140 @@ Move your USB-serial adapter wires when switching between stock VoCore2 firmware
 
 ---
 
+## eMMC / SD Card
+
+### Bus wiring
+
+The SDXC data bus is identically wired between bodybytes and VoCore2 — the same MDI pad → SD signal mapping on both boards:
+
+| SD signal | MDI pad | Net |
+|-----------|---------|-----|
+| SD\_D1 | MDI\_RP\_P3 | SD\_D1 |
+| SD\_D0 | MDI\_RN\_P3 | SD\_D0 |
+| SD\_CLK | MDI\_RP\_P4 | SD\_CLK |
+| SD\_CMD | MDI\_RN\_P4 | SD\_CMD |
+| SD\_D3 | MDI\_TP\_P4 | SD\_D3 |
+| SD\_D2 | MDI\_TN\_P4 | SD\_D2 |
+| RST\_n | MDI\_TN\_P1 | EMMC\_RST (bodybytes only) |
+
+Both use the legacy 4-bit data interface (SD\_D0–D3). 8-bit eMMC mode is not used.
+
+### Storage devices
+
+| | VoCore2 (development) | Bodybytes (production) |
+|-|-----------------------|------------------------|
+| Device | Hardkernel 32 GB eMMC module (H2) | Kingston EMMC128-IY29-5B111 (128 GB) |
+| Connection | eMMC module → Hardkernel eMMC Module Reader Board → Adafruit 4682 microSD breakout → jumper wires to breakout connector | Soldered directly on board |
+| RST\_n | Not connected | Wired to MDI\_TN\_P1 (GPIO#15) |
+
+The microSD breakout must expose all four data lines (D0–D3), CMD, and CLK — a **4-bit SDIO-capable** breakout is required. SPI-only breakouts (which expose only D0/MISO, CLK, CMD/MOSI, CS) will not work. The Adafruit 4682 exposes the full SDIO bus and is the tested choice.
+
+The Hardkernel reader board has a small pull-up resistor **R1** on RST\_n. RST\_n is not broken out to a dedicated pin, but the R1 pads are accessible and a bridge wire soldered across them can tap the signal. Connect one side of R1 to MDI\_TN\_P1 (GPIO#15) on the breakout to achieve full pin parity with the bodybytes hardware setup.
+
+If RST\_n is not wired, this is fine for normal operation — RST\_n is disabled by default in eMMC (`EXT_CSD[162] = 0x00`) and pulsing it is a no-op. See [openwrt.md](openwrt.md) for the DTS `emmc_pwrseq` node discussion.
+
+### eMMC manufacturing from PC
+
+On VoCore2, the Hardkernel eMMC module can be removed from the reader board and plugged directly into a PC for partitioning and flashing — no JTAG or U-Boot needed. The reader board appears as a USB mass storage device. Replace `/dev/sdX` with the actual device:
+
+```sh
+# Create GPT with 4 partitions
+sgdisk --zap-all /dev/sdX
+sgdisk \
+  -n 1:2048:+32M    -t 1:8300  -c 1:"kernel"      \
+  -n 2:0:+512M      -t 2:8300  -c 2:"rootfs"       \
+  -n 3:0:+4096M     -t 3:8300  -c 3:"rootfs_data"  \
+  -n 4:0:0          -t 4:8300  -c 4:"data"          \
+  /dev/sdX
+
+# Extract kernel and squashfs rootfs from sysupgrade.bin and write to eMMC
+SYSUPGRADE=openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-sysupgrade.bin
+tar xf "$SYSUPGRADE" -O 'sysupgrade-bodybytes,bodybytes/kernel' | dd of=/dev/sdX1 bs=4M conv=fsync
+tar xf "$SYSUPGRADE" -O 'sysupgrade-bodybytes,bodybytes/root'   | dd of=/dev/sdX2 bs=4M conv=fsync
+
+# Format overlay and data partitions as ext4
+mkfs.ext4 -L rootfs_data /dev/sdX3
+mkfs.ext4 -L data        /dev/sdX4
+```
+
+Partition 1 holds the raw kernel binary; partition 2 holds the squashfs rootfs (both extracted from `sysupgrade.bin`). Partition 3 (`rootfs_data`) is the ext4 overlay — libfstools mounts it over the squashfs at boot by GPT label. Partition 4 (`data`) is auto-mounted at `/mnt/data` by `block-mount` via `auto_mount 1`. See [flashing.md §5](flashing.md#5--emmc) for the full layout.
+
+---
+
 ## NOR Flash
 
-VoCore2 uses a 16 MB NOR with a different partition layout than bodybytes. When testing bodybytes U-Boot on VoCore2, the SPI NOR commands will work but the partition offsets differ from the VoCore2 stock layout. The bodybytes `generate_nor_image.py` output cannot be written verbatim to a stock VoCore2 NOR without replacing the entire flash contents.
+VoCore2 uses a 32 MB W25Q256 NOR with a different partition layout than bodybytes. When testing bodybytes U-Boot on VoCore2, the SPI NOR commands will work but the partition offsets differ from the VoCore2 stock layout. The bodybytes `generate_nor_image.py` output cannot be written verbatim to a stock VoCore2 NOR without replacing the entire flash contents.
 
 For JTAG RAM-boot development, this is not relevant — `u-boot.bin` is loaded directly to RAM and never touches NOR.
+
+### Dumping the stock NOR image
+
+Back up the full 32 MB before making any changes. The NOR is memory-mapped at `0xBC000000` (KSEG1 uncached), so it is directly readable via JTAG without any flash driver.
+
+**1 — Start OpenOCD and RAM-boot bodybytes U-Boot** (for `sf` command access and fast SPI reads):
+
+```sh
+openocd -f interface/jlink.cfg \
+    -c "transport select jtag" \
+    -c "adapter speed 100" \
+    -c "reset_config trst_and_srst separate srst_nogate connect_assert_srst" \
+    -f mt7628.cfg \
+    -c "init" \
+    -c "reset halt" \
+    -c "wait_halt 10000"
+
+nc -N localhost 4444 < scripts/openocd_run_uboot_vocore2.scr
+```
+
+**2 — Read NOR into RAM via U-Boot** (fast — uses SPI burst reads):
+
+```
+sf probe
+sf read 0x81000000 0 0x2000000
+```
+
+Wait for `SF: 33554432 bytes @ 0x0 Read: OK`.
+
+**3 — Halt and dump via OpenOCD**:
+
+```tcl
+halt
+dump_image assets/vocore2_nor_backup.bin 0xa1000000 0x2000000
+```
+
+`0x81000000` (U-Boot KSEG0) = physical `0x01000000` = KSEG1 uncached `0xa1000000`.
+
+At ~4 MHz adapter speed this takes several hours. Use `adapter speed 8000` or higher before the dump to speed it up if the EJTAG link stays stable.
+
+### Restoring the stock NOR image
+
+RAM-boot bodybytes U-Boot via JTAG as above, then load the backup into RAM:
+
+```tcl
+# OpenOCD telnet
+halt
+load_image assets/vocore2_nor_backup.bin 0x80000000 bin
+resume
+```
+
+At the U-Boot prompt:
+
+```
+sf probe
+sf erase 0 0x2000000
+sf write 0x80000000 0 0x2000000
+```
+
+Power-cycle to boot the restored stock firmware.
 
 ---
 
 ## References
 
+- <https://vocore.io/v2.html> — VoCore2 pinout and hardware documentation
 - <https://github.com/stargate01/vocore2-breakout> — breakout board KiCad files and documentation
+- <https://www.hardkernel.com/shop/32gb-emmc-module-h2/> — Hardkernel 32 GB eMMC module (H2)
+- <https://www.hardkernel.com/shop/emmc-module-reader-board-for-os-upgrade/> — Hardkernel eMMC Module Reader Board (microSD adapter)
+- <https://www.adafruit.com/product/4682> — Adafruit 4682 SDIO microSD breakout
 - [jtag.md](jtag.md) — bodybytes JTAG procedure (use `dram_init 128` and VoCore2 reset\_config when adapting for VoCore2)
 - [dts.md](dts.md) — DTS comparison: vocore2 / mt7628\_rfb / bodybytes; explains UART2 pin routing and EPHY pad mode fix

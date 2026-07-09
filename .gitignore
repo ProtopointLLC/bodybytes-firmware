@@ -1,2 +1,4 @@
 .direnv/
 docs/Bodybytes_GDrive/
+__pycache__
+*.pyc

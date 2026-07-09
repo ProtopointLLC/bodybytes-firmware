@@ -117,6 +117,9 @@ The multi-bank structure is required in U-Boot for the `mmc-pwrseq-emmc` node in
 | Console mechanism | kernel `bootargs = "console=ttyS2,115200"` | `chosen.stdout-path = uartlite@c00` | `chosen.stdout-path = uart2@e00` |
 | Physical UART | UART2 (Linux ttyS2) | UART0 | UART2 |
 | Alias | `serial0 = uartlite@c00` | `serial0 = uartlite@c00` | `serial2 = uart2@e00` |
+| Clock source | `clock-frequency = <40000000>` (hardcoded) | `clocks = <&clkctrl CLK_UART*>` (DM) | `clocks = <&clkctrl CLK_UART2>` (DM, from dtsi) |
+
+VoCore2's Linux DTS hardcodes the UART clock frequency at 40 MHz — the Linux ns16550 driver reads this directly. U-Boot DTS uses the DM clock controller (`mediatek,mt7628-clk`) instead; the clock value is read at runtime. Both result in a 40 MHz UART clock and 115200 baud at divisor 22. The SPL bypasses both mechanisms and uses `CFG_SYS_NS16550_CLK = 40000000` from `mt7628.h`.
 
 VoCore2's Linux DTS has `serial0 = uart0` as an alias but selects UART2 as the console via the kernel command line. U-Boot uses `stdout-path` to select the console directly at driver probe time.
 
@@ -129,7 +132,7 @@ All three DTS files enable UART2 with `groups = "uart2"; function = "uart2"`. In
 | UART2 TX | 47      | MDI_TP_P2 | 0 (MDI P2 path) |
 | UART2 RX | 48      | MDI_TN_P2 | 0 (MDI P2 path) |
 
-This is the same physical route in all three cases. VoCore2 and bodybytes share the same UART2 hardware path.
+Bodybytes uses `UART2_MODE=0` (MDI P2 path). VoCore2 stock firmware routes UART2 to a different mux path (P1RP/P1RN, labelled TXD2/RXD2 on the breakout). Both call it UART2/ttyS2 but emerge on different physical pins — see [vocore2.md](vocore2.md) for the connector pin table.
 
 ### 6c — Critical difference: EPHY_GPIO_AIO_EN
 
@@ -177,7 +180,7 @@ The available pinctrl states that reference this group:
 | `ephy_router_mode` | `analog` (0) | `ephy0` = enable |
 | `sd_iot_mode` | `digital` (0xf) | `sdmode` = sdxc, `sd router` = iot |
 
-In `bodybytes.dts`, `sd_iot_mode` is the pinctrl for the MMC node. It does set `EPHY_GPIO_AIO_EN`. However, MMC is probed **after** UART2 is initialized (UART2 has `bootph-all` and is the `stdout-path` console, so it is probed first, pre-relocation). By the time `sd_iot_mode` runs, UART2 has already tried and failed to output.
+In `bodybytes.dts`, `sd_iot_mode` is the pinctrl for the MMC node. It does set `EPHY_GPIO_AIO_EN`. However, MMC is probed **after** UART2 is initialized (UART2 is the `stdout-path` console, so it is probed first, pre-relocation). By the time `sd_iot_mode` runs, UART2 has already tried and failed to output.
 
 **The fix:** Add `ephy_iot_mode` to `uart2`'s `pinctrl-0` in the bodybytes board DTS. DM will then set both `UART2_MODE=0` and `EPHY_GPIO_AIO_EN=0xf` at uart2 probe time, before any UART output is attempted.
 
@@ -207,7 +210,7 @@ Changed in `u-boot/arch/mips/dts/bodybytes,bodybytes.dts`:
 
 The SPI register range difference (0x100 vs 0x40) is a Linux vs U-Boot driver difference — both drivers access the same hardware.
 
-VoCore2 runs NOR at 10 MHz; bodybytes runs at 25 MHz per `CONFIG_SF_DEFAULT_SPEED`. The bodybytes NOR partition table matches the actual flash layout (U-Boot at 0, env at 0x30000, factory at 0x40000) but omits the firmware/OpenWrt partition — U-Boot doesn't need to know about it.
+VoCore2 runs NOR at 10 MHz (conservative for the old 1.1.3 bootloader); bodybytes runs at 25 MHz per `CONFIG_SF_DEFAULT_SPEED`. The bodybytes NOR partition table matches the actual flash layout: u-boot at `0x000000`, env at `0x040000`, factory at `0x050000`, recovery at `0x060000`. The VoCore2 DTS omits the recovery/OpenWrt partition (labelled `firmware` starting at `0x050000`) — U-Boot doesn't need it.
 
 ---
 
@@ -226,7 +229,11 @@ VoCore2 runs NOR at 10 MHz; bodybytes runs at 25 MHz per `CONFIG_SF_DEFAULT_SPEE
 
 `sd_router_mode` (mt7628ram) remaps GPIO0, I2S, sdmode, I2C, and uart1 pins as GPIO for the router chip's SD card interface. This changes many pin functions at once and would conflict with bodybytes peripherals (I2S, I2C, UART1 are used).
 
-`sd_iot_mode` (bodybytes) puts EPHY P1–P4 pads in digital mode and enables SDXC on the EPHY P3/P4 pads (SD_CLK, SD_CMD, SD_D0–D3). UART2 uses P2, eMMC reset uses P1. All MDI P1–P4 pads are consumed within the bodybytes board.
+`sd_iot_mode` (bodybytes) puts EPHY P1–P4 pads in digital mode and enables SDXC on the EPHY P3/P4 pads (SD_CLK, SD_CMD, SD_D0–D3). UART2 uses P2, eMMC reset uses P1. All MDI P1–P4 pads are consumed within the bodybytes board. `bus-width = <4>` is set explicitly in `bodybytes.dts`; the dtsi base does not set it.
+
+`builtin-cd = <1>` and `r_smpl = <1>` are inherited silently from `mt7628a.dtsi`. With `non-removable`, the built-in card-detect is ignored. `r_smpl = <1>` sets rising-edge sampling on the SDXC controller.
+
+**8-bit eMMC mode is not possible on bodybytes.** The dtsi defines `emmc_iot_8bit_mode` which would add D4/D5 by remapping `groups = "uart2"` to `function = "sdxc d5 d4"`. This conflicts with UART2 being the system console. 4-bit mode with `sd_iot_mode` is the only option.
 
 On VoCore2, `sd_iot_mode` puts MDI pads in digital mode (harmless — VoCore2 uses the internal switch, not external EPHY) and enables SDXC, but there is no eMMC device. With `non-removable`, the MMC driver will attempt to probe and time out (~1–2 seconds) before continuing. This produces MMC error messages on VoCore2 but does not hang boot.
 
@@ -281,7 +288,7 @@ bodybytes `u-boot.bin` loaded via JTAG (bypassing the SPL) produces no serial ou
 1. After `reset halt`, all SoC registers are in reset state: `AGPIO_CFG = 0` → MDI P2 pads in **analog EPHY mode**.
 2. The JTAG load goes directly to `u-boot.bin` at `0x80200000`. The SPL (`u-boot-spl.bin`) does not run.
 3. The SPL is the only component that calls `setbits_32(SYSCTL_AGPIO_CFG_REG, EPHY_GPIO_AIO_EN_M)` to switch MDI P2 pads to digital mode. With no SPL, this never happens.
-4. DM probes `uart2` early (it is the `stdout-path` console and has `bootph-all`). DM applies `uart2_pins` pinctrl which sets `UART2_MODE=0` (MDI P2 route) but leaves `AGPIO_CFG` untouched.
+4. DM probes `uart2` early (it is the `stdout-path` console; modern U-Boot propagates pre-reloc requirement via the stdout-path dependency chain — no explicit `bootph-all` on the uart node is needed). DM applies `uart2_pins` pinctrl which sets `UART2_MODE=0` (MDI P2 route) but leaves `AGPIO_CFG` untouched.
 5. UART2 sends characters toward the MDI P2 pads, but the pads are in analog mode. No digital signal is produced. The MDI P2 pads on VoCore2 route to the same physical pins used for UART2 — but the digital signal never reaches them.
 
 VoCore2's stock Linux works because the stock VoCore2 U-Boot runs the SPL before Linux and sets `EPHY_GPIO_AIO_EN`. Linux inherits the register state. Our JTAG-direct load does not have this warm-start advantage.
