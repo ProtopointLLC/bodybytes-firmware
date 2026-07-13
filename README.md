@@ -27,8 +27,31 @@ Requires Linux and [Nix](https://nixos.org/download/) with flakes enabled.
 | `nix develop .#uboot` | U-Boot build + OpenOCD/JTAG. Sets `CROSS_COMPILE`, `ARCH`, `OPENOCD_SCRIPTS`. |
 | `nix develop .#openwrt` | OpenWRT host build. FHS environment; sets `AR`, `NM`, `RANLIB`, `FAKEROOTDONTTRYCHOWN`. |
 
+## Firmware
+
+The firmware runs OpenWrt as a standalone WiFi AP with no wired uplink. All services are local-only.
+
+**Network**
+
+| | Address |
+|-|---------|
+| Hostname | `bodybytes.local` (mDNS via avahi) |
+| Gateway | `192.168.1.1` , `fd13:37be:ef00::1` |
+| WiFi | WPA3/WPA2-mixed (SAE), 2.4 GHz 802.11n |
+
+**HTTPS admin (LuCI)**
+
+Reachable at `https://bodybytes.local`, `https://192.168.1.1`, or `https://fd13:37be:ef00::1`. EC P-256 self-signed certificate generated on first boot; all three access paths are covered by SANs so the browser only needs to accept the cert once.
+
+**File sharing (Samba)**
+
+`/mnt/data` (128 GB eMMC `data` partition) is shared read-write as a guest share named `data`. Discoverable on Windows via WSD (wsdd2), on macOS/Linux via mDNS (`_smb._tcp`, registered dynamically by smbd via avahi).
+
 ## Documentation
 
+- [docs/building.md](docs/building.md) — build U-Boot and OpenWRT from source
 - [docs/jtag.md](docs/jtag.md) — JTAG wiring, connectivity check, PLL/DRAM bootstrap
-- [docs/uboot.md](docs/uboot.md) — U-Boot configure, build, and full install sequence
-- [docs/openwrt.md](docs/openwrt.md) — OpenWRT build, board files reference, and eMMC flash
+- [docs/uboot.md](docs/uboot.md) — U-Boot board files, NOR image, and env layout
+- [docs/flashing.md](docs/flashing.md) — full first-install and sysupgrade procedures
+- [docs/openwrt.md](docs/openwrt.md) — OpenWRT board files, DTS, and package reference
+- [docs/vocore2.md](docs/vocore2.md) — VoCore2 bringup notes (development reference board)

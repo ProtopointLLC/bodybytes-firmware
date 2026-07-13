@@ -6,7 +6,7 @@ Target: `ramips` / subtarget `mt76x8` — see [building.md](building.md) for bui
 
 ## 1 — Board files
 
-[`bodybytes.config`](../bodybytes.config) (at the repo root) seeds the target/board selection and board-specific Kconfig options. `CONFIG_EMMC_SUPPORT=y` ensures `emmc.sh` is included in the base-files package without affecting other mt76x8 boards. `CONFIG_SAMBA4_SERVER_AVAHI=y` builds samba4 with avahi client support so smbd registers and deregisters `_smb._tcp` with avahi-daemon dynamically via D-Bus rather than requiring a static service file.
+[`bodybytes.config`](../bodybytes.config) (at the repo root) seeds the target/board selection and board-specific Kconfig options. `CONFIG_EMMC_SUPPORT=y` ensures `emmc.sh` is included in the base-files package without affecting other mt76x8 boards. `CONFIG_SAMBA4_SERVER_AVAHI=y` builds samba4 with avahi client support so smbd registers and deregisters `_smb._tcp` with avahi-daemon dynamically via D-Bus rather than requiring a static service file. `CONFIG_IMAGEOPT=y` and `CONFIG_VERSIONOPT=y` are required to activate the `VERSION_MANUFACTURER`, `VERSION_PRODUCT`, and `VERSION_MANUFACTURER_URL` symbols — without them those symbols live inside an `if VERSIONOPT` block and are silently dropped by Kconfig regardless of their values.
 
 `CONFIG_TARGET_MULTI_PROFILE=y` is required to build both device profiles in one `make` run. Without it, the device symbols (`CONFIG_TARGET_ramips_mt76x8_DEVICE_*`) live in a Kconfig `choice` block — only the last one set wins and the first is silently dropped. With `MULTI_PROFILE`, the build system switches to independent `CONFIG_TARGET_DEVICE_ramips_mt76x8_DEVICE_*` bool symbols (note the leading `DEVICE_` before the subtarget name) that can both be set simultaneously. See `include/image.mk:585` (`DEVICE_CHECK_PROFILE`) for the conditional expansion.
 
@@ -150,7 +150,8 @@ Two device profiles are defined, enabled by `CONFIG_TARGET_PER_DEVICE_ROOTFS=y`.
 ```makefile
 BODYBYTES_PACKAGES := kmod-mmc-mtk block-mount kmod-fs-ext4 uboot-envtools \
   openssh-sftp-server rsync e2fsprogs avahi-daemon lsblk \
-  -wpad-basic-mbedtls wpad-openssl
+  -wpad-basic-mbedtls wpad-openssl \
+  luci-ssl-openssl
 
 define Device/bodybytes_bodybytes
   DEVICE_VENDOR := Bodybytes
@@ -206,6 +207,7 @@ GPT partition 1 (`kernel`) holds a raw uImage blob with no filesystem. U-Boot lo
 - `e2fsprogs` — `e2fsck`/`resize2fs`/`tune2fs` for ext4 maintenance on the data partition and for `mkfs.ext4` after `parted` creates partitions in recovery.
 - `lsblk` — inspects block device layout, partition labels, and mount points.
 - `-wpad-basic-mbedtls wpad-openssl` — swaps the subtarget default for the full WPA supplicant/hostapd build with OpenSSL; required for WPA3 (SAE) and 802.11r. The MT7628AN mt76 driver sets `IEEE80211_HW_MFP_CAPABLE` via the shared mt76 framework (`mac80211.c:476`), confirming hardware 802.11w support.
+- `luci-ssl-openssl` — LuCI collection package that pulls in `luci-light`, `libustream-openssl`, and `openssl-util`. Enables HTTPS for the LuCI web interface; uhttpd listens on both port 80 (HTTP, redirects to HTTPS) and port 443. OpenSSL is already in the image from `wpad-openssl` so this adds only the ustream TLS glue and the `openssl` tool used for certificate generation. Replaces `libustream-mbedtls` as the ustream TLS backend.
 
 **Main profile only:**
 - `samba4-server` + `luci-app-samba4` — SMB file sharing; compatible with Windows, macOS, iOS, and Android.
@@ -220,6 +222,9 @@ GPT partition 1 (`kernel`) holds a raw uImage blob with no filesystem. U-Boot lo
 **`90_defaults` UCI configuration** (first boot, board-gated):
 - System: `hostname=bodybytes`
 - WiFi: `ssid=Bodybytes`, `country=US`, `encryption=sae-mixed`, `key=bodybytes` (change via LuCI before use)
+- Network: fixed ULA prefix `fd13:37be:ef00::/48` ("1337beef") overriding OpenWrt's `ula_prefix=auto`. A fixed prefix is safe because bodybytes is an isolated AP — no other device will ever share this ULA space. `ip6assign=64` tells netifd to assign the first /64 of that prefix to `br-lan`; the router's address is always `fd13:37be:ef00::1`.
+- DHCP/IPv6: `dhcpv6=server`, `ra=server`, `ra_slaac=1` on the LAN — odhcpd provides DHCPv6 and Router Advertisements with SLAAC so clients auto-configure their IPv6 addresses without explicit assignment.
+- TLS certificate: EC P-256 self-signed cert generated via `openssl req` on first boot, valid 10 years. SANs: `DNS:bodybytes.local`, `DNS:bodybytes`, `IP:192.168.1.1`, `IP:fd13:37be:ef00::1`. Covers all access paths (mDNS hostname over IPv4 and IPv6, IPv4 gateway, ULA router address). uhttpd (START=80) generates a generic cert before this script runs (START=95); the script overwrites it and restarts uhttpd to pick up the custom cert.
 - fstab: explicit mount entry for the `data` partition at `/mnt/data` (`label=data`, `fstype=ext4`, `options=noatime`, `enabled=1`)
 - Samba (guarded on `/etc/config/samba4`): sets description to `Bodybytes`; adds a read-write guest share for `/mnt/data`. mDNS/Bonjour advertisement of `_smb._tcp` is handled by smbd itself via the avahi client library (`CONFIG_SAMBA4_SERVER_AVAHI=y`) — smbd registers with avahi-daemon over D-Bus when it starts and deregisters when it stops; no static service file is needed.
 - collectd (guarded on `/etc/config/luci_statistics`): enables `collectd_disk` (monitoring `mmcblk0`), `collectd_tcpconns` (ports 22 and 445, `AllPortsSummary=1`), `collectd_processes` (smbd, nmbd, dnsmasq, dropbear, uhttpd, avahi-daemon, collectd); sets RRD `DataDir` to `/srv/collectd/rrd` — persisted on `rootfs_data` via overlayfs, outside the Samba share. collectd creates the directory on first write.
