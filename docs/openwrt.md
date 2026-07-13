@@ -6,7 +6,7 @@ Target: `ramips` / subtarget `mt76x8` — see [building.md](building.md) for bui
 
 ## 1 — Board files
 
-`bodybytes.config` (at the repo root) seeds the target/board selection and board-specific Kconfig options. `CONFIG_EMMC_SUPPORT=y` ensures `emmc.sh` is included in the base-files package without affecting other mt76x8 boards. `CONFIG_SAMBA4_SERVER_AVAHI=y` builds samba4 with avahi client support so smbd registers and deregisters `_smb._tcp` with avahi-daemon dynamically via D-Bus rather than requiring a static service file.
+[`bodybytes.config`](../bodybytes.config) (at the repo root) seeds the target/board selection and board-specific Kconfig options. `CONFIG_EMMC_SUPPORT=y` ensures `emmc.sh` is included in the base-files package without affecting other mt76x8 boards. `CONFIG_SAMBA4_SERVER_AVAHI=y` builds samba4 with avahi client support so smbd registers and deregisters `_smb._tcp` with avahi-daemon dynamically via D-Bus rather than requiring a static service file.
 
 `CONFIG_TARGET_MULTI_PROFILE=y` is required to build both device profiles in one `make` run. Without it, the device symbols (`CONFIG_TARGET_ramips_mt76x8_DEVICE_*`) live in a Kconfig `choice` block — only the last one set wins and the first is silently dropped. With `MULTI_PROFILE`, the build system switches to independent `CONFIG_TARGET_DEVICE_ramips_mt76x8_DEVICE_*` bool symbols (note the leading `DEVICE_` before the subtarget name) that can both be set simultaneously. See `include/image.mk:585` (`DEVICE_CHECK_PROFILE`) for the conditional expansion.
 
@@ -14,13 +14,13 @@ All files below live in the `openwrt/` submodule; the submodule is pinned to a c
 
 | File | Purpose |
 |------|---------|
-| `openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dtsi` | Device tree (shared by both profiles) — thin `.dts` wrappers `mt7628an_bodybytes_bodybytes.dts` and `mt7628an_bodybytes_bodybytes_recovery.dts` include it |
-| `openwrt/target/linux/ramips/image/mt76x8.mk` | Board profile: `DEVICE_PACKAGES` (includes `parted` for first-install partitioning from recovery), `IMAGE_SIZE`, `IMAGES`, `sysupgrade.bin` and `recovery.bin` build rules, `SUPPORTED_DEVICES` |
-| `openwrt/target/linux/ramips/mt76x8/base-files/etc/uci-defaults/90_defaults` | First-boot board defaults: hostname; WiFi SSID, country, WPA3-mixed encryption (`sae-mixed`, key `bodybytes`); fstab mount for `data` partition at `/mnt/data`; Samba description and `/mnt/data` share (guarded on `/etc/config/samba4`); collectd disk/tcpconns/processes enables and RRD path `/srv/collectd/rrd` (guarded on `/etc/config/luci_statistics`) |
-| `openwrt/target/linux/ramips/mt76x8/base-files/etc/board.d/02_network` | Network board detection; bodybytes entry sets `label_mac` from the factory NOR partition (offset 0x4) — exposes the WiFi MAC as the device label MAC in LuCI. No wired interface config (Ethernet disabled in DTS) |
-| `openwrt/package/boot/uboot-tools/uboot-envtools/files/ramips` | U-Boot env tool config; the `bodybytes,bodybytes` case calls `ubootenv_add_mtd "u-boot-env" "0x0" "0x1000" "0x10000"`, which resolves the `u-boot-env` MTD partition by name at runtime and writes the resulting `/dev/mtdN` path into `/etc/fw_env.config` |
-| `openwrt/target/linux/ramips/mt76x8/base-files/etc/init.d/bootcount` | Clears `upgrade_available=0` and `bootcount=0` unconditionally on every successful boot (START=99) |
-| `openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh` | Sysupgrade dispatch; bodybytes case sets `CI_KERNPART="kernel"`, `CI_ROOTPART="rootfs"`, `CI_DATAPART="rootfs_data"`, arms the U-Boot bootcount (`upgrade_available=1 bootcount=0 bootlimit=3`), then calls `emmc_do_upgrade` to write the kernel to p1 and the squashfs rootfs to p2 |
+| [`openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dtsi`](../openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dtsi) | Device tree (shared by both profiles) — thin `.dts` wrappers [`openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dts`](../openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dts) and [`openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes_recovery.dts`](../openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes_recovery.dts) include it |
+| [`openwrt/target/linux/ramips/image/mt76x8.mk`](../openwrt/target/linux/ramips/image/mt76x8.mk) | Board profile: `DEVICE_PACKAGES` (includes `parted` for first-install partitioning from recovery), `IMAGE_SIZE`, `IMAGES`, `sysupgrade.bin` and `recovery.bin` build rules, `SUPPORTED_DEVICES` |
+| [`openwrt/target/linux/ramips/mt76x8/base-files/etc/uci-defaults/90_defaults`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/uci-defaults/90_defaults) | First-boot board defaults: hostname; WiFi SSID, country, WPA3-mixed encryption (`sae-mixed`, key `bodybytes`); fstab mount for `data` partition at `/mnt/data`; Samba description and `/mnt/data` share (guarded on `/etc/config/samba4`); collectd disk/tcpconns/processes enables and RRD path `/srv/collectd/rrd` (guarded on `/etc/config/luci_statistics`) |
+| [`openwrt/target/linux/ramips/mt76x8/base-files/etc/board.d/02_network`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/board.d/02_network) | Network board detection; bodybytes entry sets `label_mac` from the factory NOR partition (offset 0x4) — exposes the WiFi MAC as the device label MAC in LuCI. No wired interface config (Ethernet disabled in DTS) |
+| [`openwrt/package/boot/uboot-tools/uboot-envtools/files/ramips`](../openwrt/package/boot/uboot-tools/uboot-envtools/files/ramips) | U-Boot env tool config; the `bodybytes,bodybytes` case calls `ubootenv_add_mtd "u-boot-env" "0x0" "0x1000" "0x10000"`, which resolves the `u-boot-env` MTD partition by name at runtime and writes the resulting `/dev/mtdN` path into `/etc/fw_env.config` |
+| [`openwrt/target/linux/ramips/mt76x8/base-files/etc/init.d/bootcount`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/init.d/bootcount) | Clears `upgrade_available=0` and `bootcount=0` unconditionally on every successful boot (START=99) |
+| [`openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh`](../openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh) | Sysupgrade dispatch; bodybytes case sets `CI_KERNPART="kernel"`, `CI_ROOTPART="rootfs"`, `CI_DATAPART="rootfs_data"`, arms the U-Boot bootcount (`upgrade_available=1 bootcount=0 bootlimit=3`), then calls `emmc_do_upgrade` to write the kernel to p1 and the squashfs rootfs to p2 |
 
 ### What the DTS sets
 
@@ -52,7 +52,7 @@ W25Q512JV, 64 MB, CS0, 25 MHz. The OS lives on eMMC; NOR holds only the bootload
 | `factory` | `0x050000` | 64 KB | read-only; 1 KB WiFi EEPROM at offset 0 |
 | `recovery` | `0x060000` | 63.625 MB | read-only; OpenWrt initramfs kernel |
 
-The `factory` partition exposes a 1 KB nvmem cell (`eeprom@0`) consumed by `&wmac`. If the partition is erased (all 0xFF) the driver falls back to the on-chip eFuse automatically. See `scripts/generate_nor_image.py` for how to build a factory blob with a custom MAC.
+The `factory` partition exposes a 1 KB nvmem cell (`eeprom@0`) consumed by `&wmac`. If the partition is erased (all 0xFF) the driver falls back to the on-chip eFuse automatically. See [`scripts/generate_nor_image.py`](../scripts/generate_nor_image.py) for how to build a factory blob with a custom MAC.
 
 The kernel MTD spi-nor driver handles BAR (Bank Address Register) addressing for the W25Q512JV's four 16 MB regions automatically — no special DTS flag is needed.
 
@@ -196,7 +196,7 @@ TARGET_DEVICES += bodybytes_bodybytes_recovery
 
 GPT partition 1 (`kernel`) holds a raw uImage blob with no filesystem. U-Boot locates it with `part start`/`part size` and loads it with `mmc read` — no filesystem driver required. The alternative, a FAT boot partition with extlinux.conf (U-Boot distro boot / `bootflow scan`), is not used because `emmc_do_upgrade` performs a raw `dd` write directly to `/dev/mmcblkNpN`: it would overwrite and destroy a FAT filesystem on every sysupgrade. Supporting distro boot would require a filesystem-aware kernel update in `platform.sh`, `kmod-fs-vfat` in the recovery image, and extlinux.conf management — added complexity with no benefit for a single-OS device with a fixed GPT layout. The raw partition approach is consistent with all other ramips/MT7628 boards in OpenWrt.
 
-`IMAGE/recovery.bin` copies the already-built initramfs kernel (`initramfs-kernel.bin`) into an explicit build output via `append-image-stage`. This file is written to the NOR `recovery` partition at `0x060000` and is used by `scripts/generate_nor_image.py`.
+`IMAGE/recovery.bin` copies the already-built initramfs kernel (`initramfs-kernel.bin`) into an explicit build output via `append-image-stage`. This file is written to the NOR `recovery` partition at `0x060000` and is used by [`scripts/generate_nor_image.py`](../scripts/generate_nor_image.py).
 
 `block-mount` provides the `block` binary and preinit scripts. `kmod-fs-ext4` provides the ext4 kernel module for the overlay and data partitions. `uboot-envtools` provides `fw_printenv` and `fw_setenv`; it is also copied into the sysupgrade ramfs by `platform.sh` (`RAMFS_COPY_BIN`). The `uboot-envtools/files/ramips` script populates `/etc/fw_env.config` at first boot by resolving the `u-boot-env` MTD partition by name, so no hardcoded device path is needed.
 
@@ -230,7 +230,7 @@ The `data` partition is mounted at `/mnt/data` via an explicit fstab entry writt
 
 ## 2 — Sysupgrade
 
-`openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh` dispatches `sysupgrade` per board name. The bodybytes case:
+[`openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh`](../openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh) dispatches `sysupgrade` per board name. The bodybytes case:
 
 ```sh
 bodybytes,bodybytes)
@@ -258,7 +258,7 @@ bodybytes,bodybytes)
 
 It also zeros 8 sectors past each written member to prevent stale content from being misread. `CI_DATAPART="rootfs_data"` tells `emmc_copy_config` where to store the sysupgrade config backup — it is written to the `rootfs_data` partition at the block offset recorded in `$EMMC_ROOTFS_BLOCKS`.
 
-The env partition is pre-programmed with `bootcmd`, `altbootcmd`, and all other boot variables by `scripts/generate_nor_image.py` at NOR image build time. `fw_setenv` read-modify-writes the partition and preserves all other variables, so `platform.sh` only needs to write the three bootcount variables.
+The env partition is pre-programmed with `bootcmd`, `altbootcmd`, and all other boot variables by [`scripts/generate_nor_image.py`](../scripts/generate_nor_image.py) at NOR image build time. `fw_setenv` read-modify-writes the partition and preserves all other variables, so [`openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh`](../openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh) only needs to write the three bootcount variables.
 
 The `init.d/bootcount` script (START=99) runs near the end of every successful OpenWrt boot and unconditionally resets `upgrade_available=0` and `bootcount=0` via `fw_setenv`. All other env variables are preserved by `fw_setenv`'s read-modify-write behaviour.
 

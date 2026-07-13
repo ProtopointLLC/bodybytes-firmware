@@ -61,7 +61,7 @@ With `trst_only`, OpenOCD resets only the TAP when `reset` is issued. The CPU is
 
 ## Step 1 — Connect and Halt at Reset
 
-Enter the dev shell first — it sets `OPENOCD_SCRIPTS` so `mt7628.cfg` and its dependencies are found by name:
+Enter the dev shell first — it sets `OPENOCD_SCRIPTS` so [`openocd/mt7628.cfg`](../openocd/mt7628.cfg) and its dependencies are found by name:
 
 ```sh
 cd /path/to/bodybytes
@@ -166,7 +166,7 @@ dram_init 256
 - Reads SYSCFG0 bit 0 to confirm DDR2 (not DDR1).
 - Pulses the DDR controller reset.
 - Writes the DDR2 PHY configuration registers.
-- Calls `memc.tcl` / `ddr_init` with the 256 MB DDR2 timing words and DQ/DQS delay values.
+- Calls [`openocd/memc.tcl`](../openocd/memc.tcl) / `ddr_init` with the 256 MB DDR2 timing words and DQ/DQS delay values.
 
 After this returns, 256 MB of DDR2 is live at physical `0x00000000` (KSEG1 uncached alias: `0xa0000000`). Verify:
 

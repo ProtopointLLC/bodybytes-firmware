@@ -36,9 +36,9 @@ make -j$(nproc)
 
 | File | Use |
 |------|-----|
-| `u-boot.bin` | U-Boot proper, linked at `0x80200000`. JTAG RAM boot. |
-| `spl/u-boot-spl.bin` | SPL; runs from NOR flash, initialises PLL+DRAM, then loads and jumps to U-Boot proper. |
-| `u-boot-with-spl.bin` | Combined NOR image: SPL immediately followed by LZMA-compressed U-Boot. Write to NOR offset 0. |
+| [`u-boot/u-boot.bin`](../u-boot/u-boot.bin) | U-Boot proper, linked at `0x80200000`. JTAG RAM boot. |
+| [`u-boot/spl/u-boot-spl.bin`](../u-boot/spl/u-boot-spl.bin) | SPL; runs from NOR flash, initialises PLL+DRAM, then loads and jumps to U-Boot proper. |
+| [`u-boot/u-boot-with-spl.bin`](../u-boot/u-boot-with-spl.bin) | Combined NOR image: SPL immediately followed by LZMA-compressed U-Boot. Write to NOR offset 0. |
 
 `CONFIG_SKIP_LOWLEVEL_INIT=y` is set, so `u-boot.bin` expects PLL and DRAM already initialised — exactly what the JTAG OpenOCD scripts provide for RAM boot.
 
@@ -76,7 +76,7 @@ cp ../bodybytes.config .config
 make defconfig
 ```
 
-`bodybytes.config` seeds the target/board selection and board-specific Kconfig options (`CONFIG_EMMC_SUPPORT=y` ensures `emmc.sh` is included in the base-files package). `CONFIG_TARGET_MULTI_PROFILE=y` enables building both device profiles (`bodybytes_bodybytes` and `bodybytes_bodybytes_recovery`) in one pass — without it the device symbols are in a Kconfig `choice` and only the last one set is built. `make defconfig` expands the seed into a full `.config`. To add or change packages, run `make menuconfig` afterwards.
+[`bodybytes.config`](../bodybytes.config) seeds the target/board selection and board-specific Kconfig options: `CONFIG_EMMC_SUPPORT=y` ensures `emmc.sh` is included in the base-files package; `CONFIG_SAMBA4_SERVER_AVAHI=y` builds samba4 with avahi client support so smbd registers `_smb._tcp` with avahi-daemon dynamically. `CONFIG_TARGET_MULTI_PROFILE=y` enables building both device profiles (`bodybytes_bodybytes` and `bodybytes_bodybytes_recovery`) in one pass — without it the device symbols are in a Kconfig `choice` and only the last one set is built. `make defconfig` expands the seed into a full `.config`. To add or change packages, run `make menuconfig` afterwards.
 
 ### Build
 
@@ -92,15 +92,17 @@ The first build downloads the MIPS cross-toolchain and all package sources; subs
 All images land in `openwrt/bin/targets/ramips/mt76x8/`. Two profiles are built:
 
 ```
-openwrt-ramips-mt76x8-bodybytes_bodybytes-sysupgrade.bin
+openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
+openwrt-ramips-mt76x8-bodybytes_bodybytes-initramfs-kernel.bin
+openwrt-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin
 openwrt-ramips-mt76x8-bodybytes_bodybytes_recovery-initramfs-kernel.bin
-openwrt-ramips-mt76x8-bodybytes_bodybytes_recovery-recovery.bin
 ```
 
 | Image | Profile | Purpose |
 |-------|---------|---------|
-| `bodybytes_bodybytes-sysupgrade.bin` | `bodybytes_bodybytes` | Sysupgrade tar (regular kernel + squashfs rootfs). Used for initial eMMC install and all OTA updates. |
-| `bodybytes_bodybytes_recovery-recovery.bin` | `bodybytes_bodybytes_recovery` | Initramfs kernel written to NOR `recovery` partition at `0x060000`; referenced by `scripts/generate_nor_image.py`. |
-| `bodybytes_bodybytes_recovery-initramfs-kernel.bin` | `bodybytes_bodybytes_recovery` | Same content as `recovery.bin`; intermediate artifact. |
+| [`openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin) | `bodybytes_bodybytes` | Sysupgrade tar (regular kernel + squashfs rootfs). Used for initial eMMC install and all OTA updates. |
+| [`openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-initramfs-kernel.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-initramfs-kernel.bin) | `bodybytes_bodybytes` | Initramfs kernel for the main profile; useful for RAM-boot testing without eMMC. |
+| [`openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin) | `bodybytes_bodybytes_recovery` | Initramfs kernel written to NOR `recovery` partition at `0x060000`; referenced by [`scripts/generate_nor_image.py`](../scripts/generate_nor_image.py). |
+| [`openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes_recovery-initramfs-kernel.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes_recovery-initramfs-kernel.bin) | `bodybytes_bodybytes_recovery` | Same content as `squashfs-recovery.bin`; intermediate build artifact. |
 
 → See [flashing.md §3](flashing.md#3--assemble-nor-image) to assemble the NOR image and [flashing.md §4](flashing.md#4--program-spi-nor) to program NOR. See [flashing.md §5](flashing.md#5--emmc) for initial eMMC install.

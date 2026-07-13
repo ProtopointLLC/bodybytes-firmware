@@ -25,7 +25,7 @@ Stores `u-boot-with-spl.bin`: SPL (≤64 KB) followed by LZMA-compressed U-Boot 
 
 **`u-boot-env` (0x040000, 64 KB)**
 
-One 64 KB erase block. `CONFIG_ENV_OFFSET=0x040000`, `CONFIG_ENV_SIZE=0x1000` (4 KB active payload), `CONFIG_ENV_SECT_SIZE=0x10000`. U-Boot erases and rewrites this block on `saveenv`. Pre-programmed by `generate_nor_image.py` via `u-boot/tools/mkenvimage` using `board/bodybytes/bodybytes/bodybytes.env` — the env is valid from the very first power-up. The partition is left writable in the OpenWrt DTS so that `fw_setenv` (from the `u-boot-envtools` package) can update variables at runtime — for example, to arm the boot counter before a sysupgrade.
+One 64 KB erase block. `CONFIG_ENV_OFFSET=0x040000`, `CONFIG_ENV_SIZE=0x1000` (4 KB active payload), `CONFIG_ENV_SECT_SIZE=0x10000`. U-Boot erases and rewrites this block on `saveenv`. Pre-programmed by [`scripts/generate_nor_image.py`](../scripts/generate_nor_image.py) via [`u-boot/tools/mkenvimage`](../u-boot/tools/mkenvimage) using [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) — the env is valid from the very first power-up. The partition is left writable in the OpenWrt DTS so that `fw_setenv` (from the `u-boot-envtools` package) can update variables at runtime — for example, to arm the boot counter before a sysupgrade.
 
 **`factory` (0x050000, 64 KB)**
 
@@ -84,7 +84,7 @@ The first two bytes should read `28 76` (chip ID `0x7628` LE). Then dump via Ope
 dump_image vocore2_factory.bin 0xBC040000 0x10000
 ```
 
-Verified contents of `docs/vocore2_factory.bin` (reference dump):
+Reference EEPROM values extracted from [`assets/vocore2_nor_backup.bin`](../assets/vocore2_nor_backup.bin) factory partition (VoCore2, NOR offset `0x40000`):
 
 | Offset | VoCore2 value | Bodybytes | Note |
 |--------|---------------|-----------|------|
@@ -97,7 +97,7 @@ Verified contents of `docs/vocore2_factory.bin` (reference dump):
 
 The VoCore2 has RF calibration burned from factory testing. Bodybytes zeroes those fields and relies on the eFuse path — this is the designed use case for `mediatek,eeprom-merge-otp`.
 
-### 2c — What `generate_nor_image.py` writes
+### 2c — What [`scripts/generate_nor_image.py`](../scripts/generate_nor_image.py) writes
 
 The script produces a correctly formatted 1 KB EEPROM blob embedded in the `factory` partition:
 
@@ -118,14 +118,14 @@ From the repo root:
 scripts/generate_nor_image.py AA:BB:CC:DD:EE:FF
 ```
 
-Produces `assets/bodybytes_nor_image.bin` (64 MB, all gaps `0xFF`) containing:
+Produces [`assets/bodybytes_nor_image.bin`](../assets/bodybytes_nor_image.bin) (64 MB, all gaps `0xFF`) containing:
 
 | Offset | Content |
 |--------|---------|
-| `0x000000` | `u-boot/u-boot-with-spl.bin` |
-| `0x040000` | U-Boot env, pre-programmed by `u-boot/tools/mkenvimage` from `board/bodybytes/bodybytes/bodybytes.env` |
+| `0x000000` | [`u-boot/u-boot-with-spl.bin`](../u-boot/u-boot-with-spl.bin) |
+| `0x040000` | U-Boot env, pre-programmed by [`u-boot/tools/mkenvimage`](../u-boot/tools/mkenvimage) from [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) |
 | `0x050000` | 1 KB WiFi EEPROM blob (chip ID `0x7628` + MAC from `--mac`) |
-| `0x060000` | `openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin` |
+| `0x060000` | [`openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin) |
 
 The script also prints the two `sf` commands needed to program the image from U-Boot. Use `--out` to override the output path.
 
@@ -157,13 +157,13 @@ Do not continue until U-Boot runs correctly from RAM. If it does not execute rel
 
 ### 4b — Full NOR programming (first-time / production)
 
-Bodybytes has no Ethernet; the only way to transfer the image is via JTAG. Load `assets/bodybytes_nor_image.bin` into RAM while U-Boot idles at its prompt (no halt needed):
+Bodybytes has no Ethernet; the only way to transfer the image is via JTAG. Load [`assets/bodybytes_nor_image.bin`](../assets/bodybytes_nor_image.bin) into RAM while U-Boot idles at its prompt (no halt needed):
 
 ```tcl
 load_image assets/bodybytes_nor_image.bin 0x80000000 bin
 ```
 
-Then run the two `sf` commands printed by `generate_nor_image.py` at the U-Boot console:
+Then run the two `sf` commands printed by [`scripts/generate_nor_image.py`](../scripts/generate_nor_image.py) at the U-Boot console:
 
 ```
 sf probe
@@ -173,7 +173,7 @@ sf write 0x80000000 0 0x4000000
 
 This erases and rewrites the full 64 MB in one pass. All partition contents — U-Boot, env, factory EEPROM, and recovery kernel — are already assembled in the image at their correct offsets.
 
-Alternatively, write `assets/bodybytes_nor_image.bin` directly with a SPI flash programmer (e.g. `flashrom`) without involving U-Boot at all.
+Alternatively, write [`assets/bodybytes_nor_image.bin`](../assets/bodybytes_nor_image.bin) directly with a SPI flash programmer (e.g. `flashrom`) without involving U-Boot at all.
 
 ### 4c — U-Boot-only update (development)
 
@@ -245,17 +245,17 @@ These sizes match the GPT layout in §5a. `parted` uses the partition name as th
 
 Transfer `sysupgrade.bin` to the device and run sysupgrade. Either:
 
-*Via LuCI web interface:* open `http://192.168.1.1` → System → Backup / Flash Firmware → Flash new firmware image → upload `openwrt-ramips-mt76x8-bodybytes_bodybytes-sysupgrade.bin`.
+*Via LuCI web interface:* open `http://192.168.1.1` → System → Backup / Flash Firmware → Flash new firmware image → upload [`openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin).
 
 *Via SSH:*
 
 ```sh
 # On the host — transfer sysupgrade.bin to the device's RAM
-scp openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-sysupgrade.bin \
+scp openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin \
     root@192.168.1.1:/tmp/
 
 # On the device
-sysupgrade -n /tmp/openwrt-ramips-mt76x8-bodybytes_bodybytes-sysupgrade.bin
+sysupgrade -n /tmp/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
 ```
 
 `emmc_do_upgrade` finds `kernel` and `rootfs` partitions by GPT label, writes the kernel and squashfs, and reboots into the new firmware. All subsequent upgrades follow the same flow (web UI or `sysupgrade`), without the partitioning step.
@@ -296,7 +296,7 @@ U-Boot reads GPIO#14 at startup before attempting any boot:
 
 ### 6b — bootcmd
 
-The full boot logic — hall sensor check, `bootcmd_recovery`, and `bootcmd_normal` — is defined in `board/bodybytes/bodybytes/bodybytes.env`, which the U-Boot build auto-detects and compiles into `default_environment[]`. The env partition is pre-programmed by `generate_nor_image.py` using the same file via `u-boot/tools/mkenvimage`, so the env is valid from the very first power-up. `fw_setenv` calls from OpenWrt read-modify-write the partition, preserving the boot commands across all sysupgrade cycles.
+The full boot logic — hall sensor check, `bootcmd_recovery`, and `bootcmd_normal` — is defined in [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env), which the U-Boot build auto-detects and compiles into `default_environment[]`. The env partition is pre-programmed by [`scripts/generate_nor_image.py`](../scripts/generate_nor_image.py) using the same file via [`u-boot/tools/mkenvimage`](../u-boot/tools/mkenvimage), so the env is valid from the very first power-up. `fw_setenv` calls from OpenWrt read-modify-write the partition, preserving the boot commands across all sysupgrade cycles.
 
 A blank or corrupt env partition always falls back to the compiled-in values, so the device can recover even if the env partition is erased. To manually persist a customisation after changing a variable at the U-Boot prompt:
 

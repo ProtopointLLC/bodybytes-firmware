@@ -117,7 +117,7 @@ Once OpenOCD is running and listening on port 4444, run the full init + U-Boot l
 nc -N localhost 4444 < scripts/openocd_run_uboot_vocore2.scr
 ```
 
-This pipes `scripts/openocd_run_uboot_vocore2.scr` (PLL init, `dram_init 128`, load `u-boot.bin` to `0x80200000`, resume) to the OpenOCD telnet port. OpenOCD processes each command and keeps running after the connection closes. U-Boot output appears on the serial adapter connected to P2TP/P2TN.
+This pipes [`scripts/openocd_run_uboot_vocore2.scr`](../scripts/openocd_run_uboot_vocore2.scr) (PLL init, `dram_init 128`, load [`u-boot/u-boot.bin`](../u-boot/u-boot.bin) to `0x80200000`, resume) to the OpenOCD telnet port. OpenOCD processes each command and keeps running after the connection closes. U-Boot output appears on the serial adapter connected to P2TP/P2TN.
 
 ---
 
@@ -192,7 +192,7 @@ sgdisk \
   /dev/sdX
 
 # Extract kernel and squashfs rootfs from sysupgrade.bin and write to eMMC
-SYSUPGRADE=openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-sysupgrade.bin
+SYSUPGRADE=openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
 tar xf "$SYSUPGRADE" -O 'sysupgrade-bodybytes,bodybytes/kernel' | dd of=/dev/sdX1 bs=4M conv=fsync
 tar xf "$SYSUPGRADE" -O 'sysupgrade-bodybytes,bodybytes/root'   | dd of=/dev/sdX2 bs=4M conv=fsync
 
@@ -223,7 +223,7 @@ The recovery boot path (`altbootcmd=run bootcmd_recovery`, `bootcmd_recovery=boo
 python3 scripts/generate_nor_image.py --nor-size 32 XX:XX:XX:XX:XX:XX
 ```
 
-Output: `assets/vocore2_nor_image.bin` (32 MB).
+Output: [`assets/vocore2_nor_image.bin`](../assets/vocore2_nor_image.bin) (32 MB).
 
 **2 — Load the image into RAM via JTAG/OpenOCD:**
 
@@ -261,7 +261,7 @@ For JTAG RAM-boot development that does not exercise the recovery path, NOR is n
 
 ### Dumping the stock NOR image
 
-Back up the full 32 MB before making any changes. The NOR is memory-mapped at `0xBC000000` (KSEG1 uncached), so it is directly readable via JTAG without any flash driver.
+A reference dump of the stock VoCore2 NOR is already committed at [`assets/vocore2_nor_backup.bin`](../assets/vocore2_nor_backup.bin). The procedure below is for reference or for re-dumping from different hardware. The NOR is memory-mapped at `0xBC000000` (KSEG1 uncached), so it is directly readable via JTAG without any flash driver.
 
 **1 — Start OpenOCD and RAM-boot bodybytes U-Boot** (for `sf` command access and fast SPI reads):
 
@@ -329,4 +329,4 @@ Power-cycle to boot the restored stock firmware.
 - <https://www.hardkernel.com/shop/emmc-module-reader-board-for-os-upgrade/> — Hardkernel eMMC Module Reader Board (microSD adapter)
 - <https://www.adafruit.com/product/4682> — Adafruit 4682 SDIO microSD breakout
 - [jtag.md](jtag.md) — bodybytes JTAG procedure (use `dram_init 128` and VoCore2 reset\_config when adapting for VoCore2)
-- [dts.md](dts.md) — DTS comparison: vocore2 / mt7628\_rfb / bodybytes; explains UART2 pin routing and EPHY pad mode fix
+- [uboot.md](uboot.md) — U-Boot DTS details including UART2 pin routing and EPHY pad mode; [openwrt.md](openwrt.md) — OpenWrt DTS details
