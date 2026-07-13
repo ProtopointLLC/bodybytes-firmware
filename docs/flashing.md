@@ -125,7 +125,7 @@ Produces `assets/bodybytes_nor_image.bin` (64 MB, all gaps `0xFF`) containing:
 | `0x000000` | `u-boot/u-boot-with-spl.bin` |
 | `0x040000` | U-Boot env, pre-programmed by `u-boot/tools/mkenvimage` from `board/bodybytes/bodybytes/bodybytes.env` |
 | `0x050000` | 1 KB WiFi EEPROM blob (chip ID `0x7628` + MAC from `--mac`) |
-| `0x060000` | `openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-recovery.bin` |
+| `0x060000` | `openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin` |
 
 The script also prints the two `sf` commands needed to program the image from U-Boot. Use `--out` to override the output path.
 
@@ -264,9 +264,21 @@ sysupgrade -n /tmp/openwrt-ramips-mt76x8-bodybytes_bodybytes-sysupgrade.bin
 
 The `rootfs_data` partition is auto-mounted at `/overlay` by libfstools (`fstools` package) without any configuration — libfstools scans GPT labels at boot and mounts any partition labelled `rootfs_data` as the overlay.
 
-The `data` partition is mounted automatically by `block-mount` via `option auto_mount 1` in `/etc/config/fstab` (shipped in the subtarget base-files). `block-mount` scans block devices via `blkid`, matches the ext4 filesystem label set by `mkfs.ext4 -L data`, and mounts it at `/mnt/data`. If the partition is absent or unformatted — e.g. during recovery with a fresh eMMC — the scan finds nothing and boot continues normally.
+The `data` partition is mounted at `/mnt/data` via an explicit fstab entry written by `/etc/uci-defaults/90_defaults` on first boot:
 
-`block-mount` and `kmod-fs-ext4` must be present in the image (both are in `DEVICE_PACKAGES`) for auto-mount to work.
+```sh
+DATA=$(uci add fstab mount)
+uci set "fstab.${DATA}.label=data"
+uci set "fstab.${DATA}.target=/mnt/data"
+uci set "fstab.${DATA}.fstype=ext4"
+uci set "fstab.${DATA}.options=noatime"
+uci set "fstab.${DATA}.enabled=1"
+uci commit fstab
+```
+
+`block-mount` matches the entry by the ext4 filesystem label set by `mkfs.ext4 -L data` and creates `/mnt/data` automatically at mount time. If the partition is absent or unformatted — e.g. during first boot from NOR recovery before eMMC is partitioned — the label scan finds nothing and boot continues normally.
+
+`block-mount` and `kmod-fs-ext4` are in `BODYBYTES_PACKAGES` and present in both profiles.
 
 See [openwrt.md](openwrt.md) for the board profile and sysupgrade dispatch.
 

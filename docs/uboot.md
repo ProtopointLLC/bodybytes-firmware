@@ -42,6 +42,18 @@ The SPL serial driver also requires `CFG_SYS_NS16550_COM3` (UART2's MMIO address
 | UART2 TX | 47      | MDI_TP_P2 | TP20       |
 | UART2 RX | 48      | MDI_TN_P2 | TP19       |
 
+**U-Boot proper DTS:** The SPL configures `EPHY_GPIO_AIO_EN` in C code. U-Boot proper uses DM and applies pinctrl states at driver probe time, so the `uart2` DTS node must list both groups explicitly:
+
+```dts
+&uart2 {
+    status = "okay";
+    pinctrl-names = "default";
+    pinctrl-0 = <&uart2_pins &ephy_iot_mode>;
+};
+```
+
+`uart2_pins` sets `UART2_MODE=0` (route UART2 signals to MDI P2 pads). `ephy_iot_mode` sets `AGPIO_CFG[20:17]=0xf` (MDI P1–P4 pads to digital mode, enabling the signal path). Both states are applied when uart2 is probed. The `uart2` node does not need an explicit `bootph-all` marker — U-Boot propagates the pre-relocation requirement via the `stdout-path` dependency chain.
+
 ### bootcmd, bootcmd\_normal, bootcmd\_recovery
 
 The boot variables live in `board/bodybytes/bodybytes/bodybytes.env`. The U-Boot build system auto-detects that file (it matches `board/<vendor>/<board>/<SYS_BOARD>.env`) and compiles it into `default_environment[]`. A blank or corrupt `u-boot-env` still boots correctly because U-Boot uses `default_environment[]`. The env partition is pre-programmed at NOR image build time by `generate_nor_image.py`, which passes the same `bodybytes.env` to `mkenvimage` — one file, no duplication.
@@ -78,31 +90,37 @@ fi
 
 ```
 echo 'Boot: recovery (NOR)'
+setenv bootargs console=ttyS2,115200
 bootm 0xBC060000
 ```
 
 | Step | Command | Effect |
 |------|---------|--------|
 | 1 | `echo 'Boot: recovery (NOR)'` | Prints the selected boot path to the serial console. |
-| 2 | `bootm 0xBC060000` | Reads the uImage header at NOR KSEG1 address `0xBC060000` (= NOR physical offset `0x060000`, the recovery partition). Decompresses the kernel into the load address in DRAM, sets up the kernel command line and FDT, and jumps to the entry point. No MMC access occurs; the entire operation runs through the NOR memory-mapped window. |
+| 2 | `setenv bootargs console=ttyS2,115200` | Sets the kernel command line. No `root=` — the recovery kernel is an initramfs image with a built-in rootfs that requires no external root device. Explicitly clearing `root=` prevents a leftover value from a previous `bootcmd_normal` call in the same session from being passed to the initramfs kernel. U-Boot writes this value into the FDT `chosen/bootargs` node before jumping to the kernel, replacing the DTS default. |
+| 3 | `bootm 0xBC060000` | Reads the uImage header at NOR KSEG1 address `0xBC060000` (= NOR physical offset `0x060000`, the recovery partition). Decompresses the kernel into the load address in DRAM, sets up the kernel command line and FDT, and jumps to the entry point. No MMC access occurs; the entire operation runs through the NOR memory-mapped window. |
 
 **`bootcmd_normal`** (load kernel from eMMC GPT partition 1 and boot):
 
 ```
 echo 'Boot: normal (eMMC)'
+setenv bootargs console=ttyS2,115200 root=/dev/mmcblk0p2 rootwait
 mmc dev 0
 part start mmc 0 1 ks
-mmc read 0x82000000 ${ks} 0x10000
+part size mmc 0 1 kz
+mmc read 0x82000000 ${ks} ${kz}
 bootm 0x82000000
 ```
 
 | Step | Command | Effect |
 |------|---------|--------|
 | 1 | `echo 'Boot: normal (eMMC)'` | Prints the selected boot path to the serial console. |
-| 2 | `mmc dev 0` | Selects eMMC as the active MMC device. Required before any `mmc` or `part` command. |
-| 3 | `part start mmc 0 1 ks` | Reads the GPT on eMMC device 0, finds partition 1 (`kernel`), and stores its start sector (LBA) in the env variable `${ks}`. Requires `CONFIG_CMD_PART=y` and `CONFIG_EFI_PARTITION=y`. |
-| 4 | `mmc read 0x82000000 ${ks} 0x10000` | Reads 0x10000 sectors (32 MB) from LBA `${ks}` into DRAM at `0x82000000`. 32 MB matches the partition size; `bootm` ignores data past the uImage header's declared size. |
-| 5 | `bootm 0x82000000` | Reads the uImage header from DRAM, decompresses and boots the regular kernel. The kernel's built-in minimal initramfs runs preinit, which calls `mount_root`: scans block devices for squashfs magic, mounts partition 2 (`rootfs`) read-only, then mounts partition 3 (`rootfs_data`, found by GPT label) at `/overlay` via overlayfs. |
+| 2 | `setenv bootargs ...` | Sets the kernel command line. `root=/dev/mmcblk0p2` tells the kernel which block device holds the squashfs rootfs (GPT partition 2, labelled `rootfs`). Without this the kernel cannot mount its root and panics. `rootwait` makes the kernel wait for the device to appear (harmless for a soldered eMMC, standard practice). U-Boot writes this value into the FDT `chosen/bootargs` node before jumping to the kernel. `root=PARTLABEL=rootfs` must **not** be used — fstools `partname_volume_find` returns NULL for non-`/dev/` root values unless `fstools_partname_fallback_scan=1` is also set, which would break the `rootfs_data` overlay mount. |
+| 3 | `mmc dev 0` | Selects eMMC as the active MMC device. Required before any `mmc` or `part` command. |
+| 4 | `part start mmc 0 1 ks` | Reads the GPT on eMMC device 0, finds partition 1 (`kernel`), and stores its start sector (LBA) in the env variable `${ks}`. Requires `CONFIG_CMD_PART=y` and `CONFIG_EFI_PARTITION=y`. |
+| 5 | `part size mmc 0 1 kz` | Stores the size of partition 1 in sectors in `${kz}`. Using the exact partition size avoids transferring unused sectors beyond the kernel image. |
+| 6 | `mmc read 0x82000000 ${ks} ${kz}` | Reads exactly `${kz}` sectors from LBA `${ks}` into DRAM at `0x82000000`. |
+| 7 | `bootm 0x82000000` | Reads the uImage header from DRAM, decompresses and boots the regular kernel. preinit calls `mount_root`: the kernel has already mounted the squashfs on `/dev/mmcblk0p2` as root; fstools scans `mmcblk0` partitions by GPT label name, mounts `rootfs_data` (partition 3) at `/overlay` via overlayfs, and auto-mounts `data` (partition 4) at `/mnt/data`. |
 
 ### Env partition pre-programming
 
@@ -169,6 +187,8 @@ The MT7628 RFB DTS configures the MMC node for a removable SD card. Three things
 **Hardware reset** — the eMMC reset pin is wired to MDI_TN_P1 (SoC pin 42, gpio0 offset 15, active-low). U-Boot pulses it at power-up via a `mmc-pwrseq-emmc` node to clear fault conditions. The eMMC's RST_n function is disabled by default (EXT_CSD[162] = 0x00); pulsing it while disabled is a safe no-op. If the OS later enables RST_n (EXT_CSD[162] = 0x01), the pulse will actually reset the device on subsequent power-ups — which is the intended behaviour.
 
 This is the canonical U-Boot pattern: `drivers/mmc/mmc-pwrseq.c` registers `compatible = "mmc-pwrseq-emmc"` as a proper `U_BOOT_DRIVER` and the `reset-gpios` + `mmc-pwrseq = <&emmc_pwrseq>` DTS pattern is used identically across multiple ARM platforms (Rockchip PX30, Allwinner A20, TI AM335x). The U-Boot driver unconditionally pulses RST_n once at MMC probe time: assert for 1 µs then deassert for 200 µs. With `GPIO_ACTIVE_LOW`, `dm_gpio_set_value(&reset, 1)` drives MDI_TN_P1 physically low (RST_n asserted), then `dm_gpio_set_value(&reset, 0)` drives it high (RST_n deasserted).
+
+**8-bit bus width is not possible.** The dtsi defines `emmc_iot_8bit_mode` which would supply SD_D4–SD_D7 by remapping `groups = "uart2"; function = "sdxc d5 d4"`. This conflicts with UART2 as the system console. 4-bit mode (`bus-width = <4>`) with `sd_iot_mode` is the only option.
 
 ### GPIO pin map (EPHY/MDI pads used as GPIO)
 

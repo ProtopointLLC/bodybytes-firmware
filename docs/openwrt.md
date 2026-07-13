@@ -6,15 +6,17 @@ Target: `ramips` / subtarget `mt76x8` — see [building.md](building.md) for bui
 
 ## 1 — Board files
 
-`bodybytes.config` (at the repo root) seeds the target/board selection and board-specific Kconfig options. `CONFIG_EMMC_SUPPORT=y` ensures `emmc.sh` is included in the base-files package without affecting other mt76x8 boards.
+`bodybytes.config` (at the repo root) seeds the target/board selection and board-specific Kconfig options. `CONFIG_EMMC_SUPPORT=y` ensures `emmc.sh` is included in the base-files package without affecting other mt76x8 boards. `CONFIG_SAMBA4_SERVER_AVAHI=y` builds samba4 with avahi client support so smbd registers and deregisters `_smb._tcp` with avahi-daemon dynamically via D-Bus rather than requiring a static service file.
+
+`CONFIG_TARGET_MULTI_PROFILE=y` is required to build both device profiles in one `make` run. Without it, the device symbols (`CONFIG_TARGET_ramips_mt76x8_DEVICE_*`) live in a Kconfig `choice` block — only the last one set wins and the first is silently dropped. With `MULTI_PROFILE`, the build system switches to independent `CONFIG_TARGET_DEVICE_ramips_mt76x8_DEVICE_*` bool symbols (note the leading `DEVICE_` before the subtarget name) that can both be set simultaneously. See `include/image.mk:585` (`DEVICE_CHECK_PROFILE`) for the conditional expansion.
 
 All files below live in the `openwrt/` submodule; the submodule is pinned to a commit that includes these changes.
 
 | File | Purpose |
 |------|---------|
-| `openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dts` | Device tree |
+| `openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dtsi` | Device tree (shared by both profiles) — thin `.dts` wrappers `mt7628an_bodybytes_bodybytes.dts` and `mt7628an_bodybytes_bodybytes_recovery.dts` include it |
 | `openwrt/target/linux/ramips/image/mt76x8.mk` | Board profile: `DEVICE_PACKAGES` (includes `parted` for first-install partitioning from recovery), `IMAGE_SIZE`, `IMAGES`, `sysupgrade.bin` and `recovery.bin` build rules, `SUPPORTED_DEVICES` |
-| `openwrt/target/linux/ramips/mt76x8/base-files/etc/config/fstab` | Global fstab config with `auto_mount 1`; `block-mount` uses this to auto-mount any labeled block device to `/mnt/<label>` at boot — the `data` partition mounts at `/mnt/data` without any board-specific config |
+| `openwrt/target/linux/ramips/mt76x8/base-files/etc/uci-defaults/90_defaults` | First-boot board defaults: hostname; WiFi SSID, country, WPA3-mixed encryption (`sae-mixed`, key `bodybytes`); fstab mount for `data` partition at `/mnt/data`; Samba description and `/mnt/data` share (guarded on `/etc/config/samba4`); collectd disk/tcpconns/processes enables and RRD path `/srv/collectd/rrd` (guarded on `/etc/config/luci_statistics`) |
 | `openwrt/target/linux/ramips/mt76x8/base-files/etc/board.d/02_network` | Network board detection; bodybytes entry sets `label_mac` from the factory NOR partition (offset 0x4) — exposes the WiFi MAC as the device label MAC in LuCI. No wired interface config (Ethernet disabled in DTS) |
 | `openwrt/package/boot/uboot-tools/uboot-envtools/files/ramips` | U-Boot env tool config; the `bodybytes,bodybytes` case calls `ubootenv_add_mtd "u-boot-env" "0x0" "0x1000" "0x10000"`, which resolves the `u-boot-env` MTD partition by name at runtime and writes the resulting `/dev/mtdN` path into `/etc/fw_env.config` |
 | `openwrt/target/linux/ramips/mt76x8/base-files/etc/init.d/bootcount` | Clears `upgrade_available=0` and `bootcount=0` unconditionally on every successful boot (START=99) |
@@ -93,6 +95,28 @@ Kingston EMMC128-IY29-5B111, 128 GB eMMC 5.1, on EPHY P3/P4 MDI pads (SoC pins 5
 
 `cap-mmc-highspeed`, `bus-width = <4>`, and `no-1-8-v` are inherited from `mt7628an.dtsi`. High Speed SDR mode (≤52 MHz, ≤52 MB/s) is the fastest mode the MT7628 SDXC controller supports at 3.3 V VCCQ; HS200/HS400 require 1.8 V and are unreachable regardless.
 
+8-bit bus width (`bus-width = <8>`) is not possible: the four additional data lines (SD_D4–SD_D7) would require `groups = "uart2"; function = "sdxc d5 d4"` (as defined in `emmc_iot_8bit_mode` in the dtsi), which conflicts with UART2 as the system console.
+
+#### Boot mode selector — `keys`
+
+```dts
+keys {
+    compatible = "gpio-keys";
+
+    boot-mode {
+        label = "boot-mode";
+        linux,code = <BTN_0>;
+        gpios = <&gpio 14 GPIO_ACTIVE_LOW>;
+    };
+};
+```
+
+MDI_TP_P1 (SoC pin 43, GPIO#14) — TI DRV5032FCDBZT hall-effect sensor, active-low (magnet present = low = pressed). U-Boot reads this GPIO at boot to choose normal vs. recovery boot; the `gpio-keys` node exposes the physical state to Linux via the input subsystem so userspace can observe it without polling.
+
+The `button-hotplug` module maps `BTN_0` → `BUTTON=BTN_0`. Hotplug scripts in `/etc/hotplug.d/button/` match on `[ "$BUTTON" = "BTN_0" ]`. The DTS `label` is used only as the GPIO consumer description in `/sys/kernel/debug/gpio`; it does not affect `BUTTON=`.
+
+GPIO#14 is on the same MDI P1 pad group as GPIO#15 (eMMC reset), so `mdi_p1_gpio` pinctrl state (which sets `SPIS_MODE=gpio`) is required for both. The `gpio-keys` driver claims GPIO#14 at probe time, preventing accidental userspace re-export.
+
 #### Ethernet — `&ethernet` / `&esw`
 
 Both disabled. Bodybytes has no physical Ethernet ports; the MT7628 internal switch is unused.
@@ -119,31 +143,88 @@ Points the MT7628 integrated 2.4 GHz radio at the 1 KB EEPROM in the `factory` p
 
 If the factory partition is entirely erased (all 0xFF) the driver discards the external EEPROM and copies the eFuse wholesale, including whatever MAC MediaTek burned into the chip (often `0xFF:FF:FF:FF:FF:FF` on engineering samples). Always write a valid factory blob with your own MAC.
 
-### Board profile
+### Board profiles
+
+Two device profiles are defined, enabled by `CONFIG_TARGET_PER_DEVICE_ROOTFS=y`. Each starts from the full `.config` package set and applies per-device package additions.
 
 ```makefile
+BODYBYTES_PACKAGES := kmod-mmc-mtk block-mount kmod-fs-ext4 uboot-envtools \
+  openssh-sftp-server rsync e2fsprogs avahi-daemon lsblk \
+  -wpad-basic-mbedtls wpad-openssl
+
 define Device/bodybytes_bodybytes
   DEVICE_VENDOR := Bodybytes
   DEVICE_MODEL := Bodybytes
-  IMAGE_SIZE := 120m
-  IMAGES := sysupgrade.bin recovery.bin
-  IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
-  IMAGE/recovery.bin := append-image-stage initramfs-kernel.bin | check-size
-  DEVICE_PACKAGES := kmod-mmc-mtk block-mount kmod-fs-ext4 uboot-envtools parted
+  IMAGE_SIZE := 544m
+  IMAGES := sysupgrade.bin
+  IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata | check-size
+  DEVICE_PACKAGES := $(BODYBYTES_PACKAGES) \
+    samba4-server luci-app-samba4 \
+    luci-app-statistics \
+    collectd-mod-cpu collectd-mod-load collectd-mod-memory \
+    collectd-mod-disk collectd-mod-interface collectd-mod-iwinfo \
+    collectd-mod-tcpconns collectd-mod-processes \
+    iperf3 luci-app-ttyd luci-app-nlbwmon
   SUPPORTED_DEVICES := bodybytes,bodybytes
 endef
 TARGET_DEVICES += bodybytes_bodybytes
+
+define Device/bodybytes_bodybytes_recovery
+  DEVICE_VENDOR := Bodybytes
+  DEVICE_MODEL := Bodybytes
+  DEVICE_VARIANT := Recovery
+  IMAGE_SIZE := 65152k
+  IMAGES := recovery.bin
+  IMAGE/recovery.bin := append-image-stage initramfs-kernel.bin | check-size
+  DEVICE_PACKAGES := $(BODYBYTES_PACKAGES) parted
+  SUPPORTED_DEVICES := bodybytes,bodybytes
+endef
+TARGET_DEVICES += bodybytes_bodybytes_recovery
 ```
 
-`IMAGE_SIZE := 120m` bounds the `recovery.bin` (initramfs kernel) size against the NOR recovery partition (63.625 MB).
+`BODYBYTES_PACKAGES` is a shared Make variable holding the packages common to both profiles — the same pattern used by `USB2_PACKAGES` in `bcm47xx`.
 
-`IMAGE/sysupgrade.bin` uses `sysupgrade-tar | append-metadata` — the canonical form for all eMMC boards. `sysupgrade-tar` packages the regular kernel and squashfs rootfs as separate tar members (`sysupgrade-*/kernel` and `sysupgrade-*/root`). `emmc_do_upgrade` in `platform.sh` unpacks the tar and writes each member to its respective partition.
+`IMAGE_SIZE := 544m` for the sysupgrade profile reflects the actual eMMC GPT layout: 32 MiB kernel partition + 512 MiB rootfs partition. `check-size` enforces this at build time.
+
+`IMAGE_SIZE := 65152k` for the recovery profile matches the NOR `recovery` partition exactly (63.625 MB = `0x3FA0000` bytes). `check-size` rejects an initramfs that would overflow the NOR partition.
+
+`DEVICE_VARIANT := Recovery` distinguishes the recovery profile in the build system without modifying `DEVICE_MODEL`. The primary sysupgrade profile has no variant.
+
+`IMAGE/sysupgrade.bin` uses `sysupgrade-tar | append-metadata | check-size` — the canonical form for all eMMC boards. `sysupgrade-tar` packages the regular kernel and squashfs rootfs as separate tar members (`sysupgrade-*/kernel` and `sysupgrade-*/root`). `emmc_do_upgrade` in `platform.sh` unpacks the tar and writes each member to its respective partition.
+
+#### Raw kernel partition vs. FAT/distro boot
+
+GPT partition 1 (`kernel`) holds a raw uImage blob with no filesystem. U-Boot locates it with `part start`/`part size` and loads it with `mmc read` — no filesystem driver required. The alternative, a FAT boot partition with extlinux.conf (U-Boot distro boot / `bootflow scan`), is not used because `emmc_do_upgrade` performs a raw `dd` write directly to `/dev/mmcblkNpN`: it would overwrite and destroy a FAT filesystem on every sysupgrade. Supporting distro boot would require a filesystem-aware kernel update in `platform.sh`, `kmod-fs-vfat` in the recovery image, and extlinux.conf management — added complexity with no benefit for a single-OS device with a fixed GPT layout. The raw partition approach is consistent with all other ramips/MT7628 boards in OpenWrt.
 
 `IMAGE/recovery.bin` copies the already-built initramfs kernel (`initramfs-kernel.bin`) into an explicit build output via `append-image-stage`. This file is written to the NOR `recovery` partition at `0x060000` and is used by `scripts/generate_nor_image.py`.
 
-`block-mount` provides the `block` binary and preinit scripts. `kmod-fs-ext4` provides the ext4 kernel module for the overlay and data partitions. `uboot-envtools` provides `fw_printenv` and `fw_setenv`; it is also copied into the sysupgrade ramfs by `platform.sh` (`RAMFS_COPY_BIN`). The `uboot-envtools/files/ramips` script populates `/etc/fw_env.config` at first boot by resolving the `u-boot-env` MTD partition by name, so no hardcoded device path is needed. `parted` is included so the recovery initramfs can partition a fresh eMMC before the first sysupgrade (see [flashing.md §5b](flashing.md#5b--first-install-from-nor-recovery)).
+`block-mount` provides the `block` binary and preinit scripts. `kmod-fs-ext4` provides the ext4 kernel module for the overlay and data partitions. `uboot-envtools` provides `fw_printenv` and `fw_setenv`; it is also copied into the sysupgrade ramfs by `platform.sh` (`RAMFS_COPY_BIN`). The `uboot-envtools/files/ramips` script populates `/etc/fw_env.config` at first boot by resolving the `u-boot-env` MTD partition by name, so no hardcoded device path is needed.
 
-`block-mount` with `auto_mount 1` (set in the subtarget fstab) auto-mounts the `data` partition at `/mnt/data` via `blkid` label scanning — no board-specific config required. The `rootfs_data` overlay partition is handled by libfstools (by GPT label) independently. See [flashing.md §5c](flashing.md#5c--openwrt-storage-mounts) for details.
+**`BODYBYTES_PACKAGES`** (both profiles):
+- `openssh-sftp-server` + `rsync` — needed in recovery to transfer a sysupgrade image into the device before flashing.
+- `avahi-daemon` — advertises `bodybytes.local` via mDNS; useful in recovery where the user has no easy way to find the device IP.
+- `e2fsprogs` — `e2fsck`/`resize2fs`/`tune2fs` for ext4 maintenance on the data partition and for `mkfs.ext4` after `parted` creates partitions in recovery.
+- `lsblk` — inspects block device layout, partition labels, and mount points.
+- `-wpad-basic-mbedtls wpad-openssl` — swaps the subtarget default for the full WPA supplicant/hostapd build with OpenSSL; required for WPA3 (SAE) and 802.11r. The MT7628AN mt76 driver sets `IEEE80211_HW_MFP_CAPABLE` via the shared mt76 framework (`mac80211.c:476`), confirming hardware 802.11w support.
+
+**Main profile only:**
+- `samba4-server` + `luci-app-samba4` — SMB file sharing; compatible with Windows, macOS, iOS, and Android.
+- `luci-app-statistics` + `collectd-mod-{cpu,load,memory,disk,interface,iwinfo,tcpconns,processes}` — system, storage, WiFi, and TCP connection metrics in LuCI. `collectd-mod-ping` is excluded — the device has no upstream internet connection and is a local-only AP.
+- `iperf3` — network throughput benchmarking; run `iperf3 -s` on device, `iperf3 -c bodybytes.local` from a client to measure WiFi throughput under load.
+- `luci-app-ttyd` — web terminal in LuCI; provides browser-based shell access without SSH, critical once the device is implanted and serial is inaccessible.
+- `luci-app-nlbwmon` — per-client bandwidth tracking in LuCI.
+
+**Recovery profile only:**
+- `parted` — partitions a fresh eMMC before the first sysupgrade (see [flashing.md §5b](flashing.md#5b--first-install-from-nor-recovery)).
+
+**`90_defaults` UCI configuration** (first boot, board-gated):
+- System: `hostname=bodybytes`
+- WiFi: `ssid=Bodybytes`, `country=US`, `encryption=sae-mixed`, `key=bodybytes` (change via LuCI before use)
+- fstab: explicit mount entry for the `data` partition at `/mnt/data` (`label=data`, `fstype=ext4`, `options=noatime`, `enabled=1`)
+- Samba (guarded on `/etc/config/samba4`): sets description to `Bodybytes`; adds a read-write guest share for `/mnt/data`. mDNS/Bonjour advertisement of `_smb._tcp` is handled by smbd itself via the avahi client library (`CONFIG_SAMBA4_SERVER_AVAHI=y`) — smbd registers with avahi-daemon over D-Bus when it starts and deregisters when it stops; no static service file is needed.
+- collectd (guarded on `/etc/config/luci_statistics`): enables `collectd_disk` (monitoring `mmcblk0`), `collectd_tcpconns` (ports 22 and 445, `AllPortsSummary=1`), `collectd_processes` (smbd, nmbd, dnsmasq, dropbear, uhttpd, avahi-daemon, collectd); sets RRD `DataDir` to `/srv/collectd/rrd` — persisted on `rootfs_data` via overlayfs, outside the Samba share. collectd creates the directory on first write.
+
+The `data` partition is mounted at `/mnt/data` via an explicit fstab entry written by `90_defaults` on first boot (`uci add fstab mount` with `label=data`, `target=/mnt/data`, `fstype=ext4`, `options=noatime`, `enabled=1`). The `block` daemon creates `/mnt/data` automatically at mount time. The `rootfs_data` overlay partition is handled by libfstools (matched by GPT label) independently.
 
 ---
 

@@ -76,31 +76,31 @@ cp ../bodybytes.config .config
 make defconfig
 ```
 
-`bodybytes.config` seeds the target/board selection and board-specific Kconfig options (`CONFIG_EMMC_SUPPORT=y` ensures `emmc.sh` is included in the base-files package). `make defconfig` expands it into a full `.config`. To add or change packages, run `make menuconfig` afterwards.
+`bodybytes.config` seeds the target/board selection and board-specific Kconfig options (`CONFIG_EMMC_SUPPORT=y` ensures `emmc.sh` is included in the base-files package). `CONFIG_TARGET_MULTI_PROFILE=y` enables building both device profiles (`bodybytes_bodybytes` and `bodybytes_bodybytes_recovery`) in one pass — without it the device symbols are in a Kconfig `choice` and only the last one set is built. `make defconfig` expands the seed into a full `.config`. To add or change packages, run `make menuconfig` afterwards.
 
 ### Build
 
 ```sh
 make download
-make world -j$(nproc)
+make V=s world -j$(nproc)
 ```
 
 The first build downloads the MIPS cross-toolchain and all package sources; subsequent builds are incremental.
 
 ### Output
 
-All images land in `openwrt/bin/targets/ramips/mt76x8/`:
+All images land in `openwrt/bin/targets/ramips/mt76x8/`. Two profiles are built:
 
 ```
-openwrt-ramips-mt76x8-bodybytes_bodybytes-initramfs-kernel.bin
-openwrt-ramips-mt76x8-bodybytes_bodybytes-recovery.bin
 openwrt-ramips-mt76x8-bodybytes_bodybytes-sysupgrade.bin
+openwrt-ramips-mt76x8-bodybytes_bodybytes_recovery-initramfs-kernel.bin
+openwrt-ramips-mt76x8-bodybytes_bodybytes_recovery-recovery.bin
 ```
 
-| Image | Purpose |
-|-------|---------|
-| `initramfs-kernel.bin` | Raw initramfs kernel; intermediate artifact consumed by `recovery.bin`. |
-| `recovery.bin` | Same content as `initramfs-kernel.bin`, explicitly declared as an `IMAGES` output. Written to NOR `recovery` partition at `0x060000`; referenced by `scripts/generate_nor_image.py`. |
-| `sysupgrade.bin` | Sysupgrade tar (regular kernel + squashfs rootfs). Used for initial eMMC install and all OTA updates. |
+| Image | Profile | Purpose |
+|-------|---------|---------|
+| `bodybytes_bodybytes-sysupgrade.bin` | `bodybytes_bodybytes` | Sysupgrade tar (regular kernel + squashfs rootfs). Used for initial eMMC install and all OTA updates. |
+| `bodybytes_bodybytes_recovery-recovery.bin` | `bodybytes_bodybytes_recovery` | Initramfs kernel written to NOR `recovery` partition at `0x060000`; referenced by `scripts/generate_nor_image.py`. |
+| `bodybytes_bodybytes_recovery-initramfs-kernel.bin` | `bodybytes_bodybytes_recovery` | Same content as `recovery.bin`; intermediate artifact. |
 
 → See [flashing.md §3](flashing.md#3--assemble-nor-image) to assemble the NOR image and [flashing.md §4](flashing.md#4--program-spi-nor) to program NOR. See [flashing.md §5](flashing.md#5--emmc) for initial eMMC install.

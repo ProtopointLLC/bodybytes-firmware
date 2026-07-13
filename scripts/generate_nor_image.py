@@ -38,7 +38,7 @@ MKENVIMAGE = REPO / "u-boot/tools/mkenvimage"
 ENV_TXT    = REPO / "u-boot/board/bodybytes/bodybytes/bodybytes.env"
 UBOOT_BIN  = REPO / "u-boot/u-boot-with-spl.bin"
 RECOVERY_BIN = (REPO / "openwrt/bin/targets/ramips/mt76x8"
-                / "openwrt-ramips-mt76x8-bodybytes_bodybytes-recovery.bin")
+                / "openwrt-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin")
 
 
 def build_env() -> bytes:
