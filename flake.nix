@@ -41,19 +41,6 @@
         openwrt = (pkgs.buildFHSEnv {
           name = "openwrt";
 
-          targetPkgs = pkgs: with pkgs; [
-            gcc gnumake bison flex gawk patch
-            diffutils findutils coreutils util-linux
-            git rsync wget unzip bzip2 gzip
-            perl
-            (python3.withPackages (ps: with ps; [ setuptools ]))
-            ncurses ncurses.dev
-            openssl openssl.dev zlib zlib.dev xz
-            gettext
-            file which pkg-config swig dtc bash
-            (lib.lowPrio gcc.cc)
-          ];
-
           profile = ''
             export AR=gcc-ar
             export RANLIB=gcc-ranlib
@@ -63,7 +50,21 @@
             export NIX_LDFLAGS="-L/usr/lib"
             export NIX_HARDENING_ENABLE=""
             export LD_LIBRARY_PATH="/usr/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            unset SOURCE_DATE_EPOCH
           '';
+
+          targetPkgs = pkgs: with pkgs; [
+            gcc gnumake bison flex gawk patch
+            diffutils findutils coreutils
+            git rsync wget unzip bzip2 gzip
+            perl
+            (python3.withPackages (ps: with ps; [ setuptools ]))
+            ncurses ncurses.dev
+            openssl openssl.dev zlib zlib.dev xz
+            gettext
+            file which pkg-config swig dtc bash
+            (lib.lowPrio gcc.cc)
+          ];
         }).env;
 
       };
