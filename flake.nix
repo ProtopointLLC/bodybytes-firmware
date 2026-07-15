@@ -23,8 +23,7 @@
           '';
 
           buildInputs = with pkgs; [
-            picocom
-            openocd
+            picocom openocd flashrom
             inetutils
             crossPkgs.buildPackages.gcc
             crossPkgs.buildPackages.binutils
@@ -33,6 +32,7 @@
             ncurses ncurses.dev
             (python3.withPackages (ps: with ps; [
               pyelftools pycryptodome setuptools
+              pyserial pyfdt
             ]))
           ];
         };
