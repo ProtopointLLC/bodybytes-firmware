@@ -1,221 +1,157 @@
 #!/usr/bin/env python3
 """
-Flash NOR partitions to bodybytes via OpenOCD + U-Boot serial console.
+Flash NOR partitions to bodybytes.
 
-Prerequisites:
-  1. OpenOCD running with bodybytes U-Boot active at the => prompt
-     (see docs/flashing.md §4a for JTAG RAM-boot procedure)
-  2. build/ blobs generated: scripts/generate_nor_image.py <MAC>
-  3. pyserial installed: pip install pyserial
+Three strategies (select with --jtag / --flashrom / --file):
+  --jtag      Load via JTAG into RAM, write via U-Boot sf commands (default)
+  --flashrom  Write directly via CH341A SPI programmer (faster; power off board first)
+  --file      Assemble full NOR image and write to build/ (implies --all)
+
+Prerequisites (JTAG):
+  1. U-Boot running at the => prompt (use boot_uboot_jtag.py to bring up a blank board)
+  2. build/ blobs generated: scripts/generate_nor_env_wifi_images.py
+
+Prerequisites (flashrom):
+  1. Board powered off and disconnected from JTAG
+  2. CH341A connected to SPI header
+  3. flashrom installed
 
 Usage:
-  flash_nor_images.py --all --port /dev/ttyUSB0
-  flash_nor_images.py --u-boot --recovery --port /dev/ttyUSB0
-  flash_nor_images.py --u-boot-env --factory --port /dev/ttyUSB0
+  flash_nor_images.py --all --full-erase          # JTAG: full chip erase then all partitions
+  flash_nor_images.py --all                        # JTAG: incremental
+  flash_nor_images.py --flashrom --all             # flashrom: selected regions only
+  flash_nor_images.py --flashrom --all --full-erase  # flashrom: write entire chip image
+  flash_nor_images.py --file                       # assemble full image to build/
 
-The W25Q512JV uses native 4-byte addressing (entered via 0xB7 on sf probe);
-no BAR (Bank Address Register) handling is needed.
+Connection settings are read from scripts/config.ini.
 """
 
 import argparse
-import re
-import socket
-import sys
 import tempfile
-import time
 from pathlib import Path
 
-import fdt
 import serial
 
-REPO = Path(__file__).resolve().parent.parent
-
-SECT_SIZE = 0x1_0000    # 64 KB erase sector (W25Q512JV block size)
-RAM_ADDR  = 0x8000_0000  # DRAM staging address
-
-DTS_FILE = REPO / "u-boot/arch/mips/dts/bodybytes,bodybytes.dts"
-
-# DTS partition label → (binary path, erase full partition?)
-# erase_full=True  → erase the entire DTS partition size before writing
-# erase_full=False → erase only as much as the binary needs (rounded up to sector)
-_PARTITION_CONFIG = {
-    "u-boot":     (REPO / "u-boot/u-boot-with-spl.bin",                                                                                        True),
-    "u-boot-env": (REPO / "build/bodybytes_nor_uboot_env.bin",                                                                                True),
-    "factory":    (REPO / "build/bodybytes_nor_wifi_factory.bin",                                                                              True),
-    "recovery":   (REPO / "openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin", False),
-}
-
-ORDERED = list(_PARTITION_CONFIG)
+from lib.openocd import OpenOCD
+from lib.uboot import UBoot
+from lib.log import log, err, oc as _oc, ub as _ub, subproc
+from lib.config import (
+    OPENOCD_HOST, OPENOCD_PORT,
+    SERIAL_PORT, SERIAL_BAUD,
+    STAGING_ADDR, NOR_SIZE, NOR_SECTOR_SIZE,
+    NOR_CHIP_NAME, NOR_FLASHROM_PROG,
+    UBOOT_BIN, UBOOT_ENV_BIN, FACTORY_BIN, RECOVERY_BIN, NOR_IMAGE,
+)
+from lib.dts import parse_nor_partitions
 
 
-def _build_partitions() -> dict[str, dict]:
-    if not DTS_FILE.exists():
-        sys.exit(f"DTS not found: {DTS_FILE}")
-    text = re.sub(r'^\s*#.*$', '', DTS_FILE.read_text(), flags=re.MULTILINE)
-    dts = {
-        node.get_property('label').value: tuple(node.get_property('reg').value[:2])
-        for _, node in fdt.parse_dts(text)
-        if node.get_property('label') is not None and node.get_property('reg') is not None
-    }
-    def resolve(label, binary, erase_full):
-        if label not in dts:
-            sys.exit(f"Partition '{label}' not found in {DTS_FILE}")
-        offset, size = dts[label]
-        return {"binary": binary, "offset": offset, "erase": size if erase_full else None}
-    return {label: resolve(label, binary, erase_full)
-            for label, (binary, erase_full) in _PARTITION_CONFIG.items()}
+def _sector_ceil(n: int) -> int:
+    return (n + NOR_SECTOR_SIZE - 1) & ~(NOR_SECTOR_SIZE - 1)
 
 
-PARTITIONS = _build_partitions()
+# --- JTAG strategy ---
 
-
-# ── OpenOCD telnet client ────────────────────────────────────────────────────
-
-class OpenOCD:
-    PROMPT = b"> "
-
-    def __init__(self, host: str = "localhost", port: int = 4444):
-        self._sock = socket.create_connection((host, port), timeout=10)
-        self._buf = b""
-        self._drain(timeout=10)
-
-    def cmd(self, command: str, timeout: float = 300) -> str:
-        self._sock.sendall(command.encode() + b"\n")
-        return self._drain(timeout=timeout)
-
-    def _drain(self, timeout: float) -> str:
-        deadline = time.monotonic() + timeout
-        while not self._buf.endswith(self.PROMPT):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError("OpenOCD: timed out waiting for prompt")
-            self._sock.settimeout(min(remaining, 2.0))
-            try:
-                chunk = self._sock.recv(4096)
-            except socket.timeout:
-                continue
-            if not chunk:
-                raise ConnectionError("OpenOCD: connection closed")
-            self._buf += chunk
-        result, self._buf = self._buf[: -len(self.PROMPT)], b""
-        return result.decode(errors="replace").strip()
-
-    def close(self):
-        try:
-            self._sock.close()
-        except OSError:
-            pass
-
-
-# ── U-Boot serial console client ─────────────────────────────────────────────
-
-class UBoot:
-    PROMPT = b"=> "
-
-    def __init__(self, port: str, baud: int = 115200):
-        self._ser = serial.Serial(port, baud, timeout=0.1)
-        time.sleep(0.2)
-        self._ser.reset_input_buffer()
-
-    def sync(self, timeout: float = 5.0) -> bool:
-        """Send a blank line and confirm the => prompt appears."""
-        self._ser.write(b"\n")
-        try:
-            self._read_until_prompt(timeout=timeout)
-            return True
-        except TimeoutError:
-            return False
-
-    def cmd(self, command: str, timeout: float = 120.0) -> str:
-        self._ser.write(command.encode() + b"\n")
-        return self._read_until_prompt(timeout=timeout)
-
-    def _read_until_prompt(self, timeout: float) -> str:
-        deadline = time.monotonic() + timeout
-        buf = b""
-        while time.monotonic() < deadline:
-            chunk = self._ser.read(self._ser.in_waiting or 1)
-            if chunk:
-                buf += chunk
-                if buf.endswith(self.PROMPT):
-                    return buf[: -len(self.PROMPT)].decode(errors="replace").strip()
-        raise TimeoutError(f"U-Boot: no prompt after {timeout:.0f}s")
-
-    def close(self):
-        try:
-            self._ser.close()
-        except Exception:
-            pass
-
-
-# ── flash logic ───────────────────────────────────────────────────────────────
-
-def flash_partition(openocd: OpenOCD, uboot: UBoot,
-                    label: str, binary: Path,
-                    flash_offset: int, erase_size: int | None) -> None:
+def _flash_jtag(openocd: OpenOCD, uboot: UBoot,
+                label: str, binary: Path, flash_offset: int) -> None:
     data = binary.read_bytes()
+    erase_size = min(_sector_ceil(len(data)), NOR_SIZE - flash_offset)
 
-    if erase_size is None:
-        erase_size = (len(data) + SECT_SIZE - 1) & ~(SECT_SIZE - 1)
+    log(f"Flashing '{label}': {binary.name} ({len(data):#x} bytes, NOR offset {flash_offset:#x})")
 
-    if len(data) > erase_size:
-        sys.exit(f"[{label}] binary ({len(data):#x} B) exceeds erase region ({erase_size:#x} B)")
-
-    print(f"\n── {label} ──")
-    print(f"   binary : {binary.name}  ({len(data):#x} bytes)")
-    print(f"   NOR    : offset {flash_offset:#x}, erase {erase_size:#x}")
-
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
-        tmp = Path(f.name)
-        f.write(data)
-    try:
-        print(f"   load → DRAM {RAM_ADDR:#010x} ... ", end="", flush=True)
-        openocd.cmd("halt", timeout=10)
-        openocd.cmd(f"load_image {tmp} {RAM_ADDR:#x} bin", timeout=180)
-        openocd.cmd("resume", timeout=10)
-        print("ok")
-    finally:
-        tmp.unlink(missing_ok=True)
+    _oc(openocd, "halt", timeout=10)
+    out = _oc(openocd, f"load_image {binary} {STAGING_ADDR:#x} bin")
+    if "bytes written" not in out:
+        err(f"load_image failed for {label}")
+    _oc(openocd, "resume", timeout=10)
 
     uboot.sync(timeout=5)
 
-    print(f"   sf probe ... ", end="", flush=True)
-    out = uboot.cmd("sf probe", timeout=10)
+    out = _ub(uboot, "sf probe", timeout=10)
     if "Detected" not in out:
-        sys.exit(f"\nsf probe failed:\n{out}")
-    for line in out.splitlines():
-        if "Detected" in line or "SF:" in line:
-            print(line.strip())
-            break
+        err(f"sf probe failed:\n{out}")
 
-    print(f"   sf erase {flash_offset:#x} {erase_size:#x} ... ", end="", flush=True)
-    out = uboot.cmd(f"sf erase {flash_offset:#x} {erase_size:#x}", timeout=120)
+    out = _ub(uboot, f"sf erase {flash_offset:#x} {erase_size:#x}")
     if "OK" not in out:
-        sys.exit(f"\nsf erase failed:\n{out}")
-    print("ok")
+        err(f"sf erase failed:\n{out}")
 
-    print(f"   sf write {RAM_ADDR:#x} {flash_offset:#x} {len(data):#x} ... ",
-          end="", flush=True)
-    out = uboot.cmd(f"sf write {RAM_ADDR:#x} {flash_offset:#x} {len(data):#x}",
-                    timeout=180)
+    out = _ub(uboot, f"sf write {STAGING_ADDR:#x} {flash_offset:#x} {len(data):#x}")
     if "OK" not in out:
-        sys.exit(f"\nsf write failed:\n{out}")
-    print("ok")
+        err(f"sf write failed:\n{out}")
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
+# --- file strategy ---
+
+def _flash_file(selected: list[str], partitions: dict) -> None:
+    img = bytearray(b"\xff" * NOR_SIZE)
+    for name in selected:
+        data = partitions[name]["binary"].read_bytes()
+        offset = partitions[name]["offset"]
+        part_size = partitions[name]["size"]
+        if len(data) > part_size:
+            err(f"'{name}' binary ({len(data):#x} B) exceeds partition ({part_size:#x} B)")
+        img[offset:offset + len(data)] = data
+    NOR_IMAGE.parent.mkdir(parents=True, exist_ok=True)
+    NOR_IMAGE.write_bytes(img)
+    log(f"Written: {NOR_IMAGE}  ({len(img) // (1024 * 1024)} MB)")
+    log(f"Program with: flashrom -p {NOR_FLASHROM_PROG} -c {NOR_CHIP_NAME} --progress -w {NOR_IMAGE}")
+
+
+# --- flashrom strategy ---
+
+def _flash_flashrom(selected: list[str], partitions: dict, full_erase: bool) -> None:
+    img = bytearray(b"\xff" * NOR_SIZE)
+    sizes = {}
+    for name in selected:
+        data = partitions[name]["binary"].read_bytes()
+        offset = partitions[name]["offset"]
+        img[offset:offset + len(data)] = data
+        sizes[name] = len(data)
+
+    base = ["flashrom", "-p", NOR_FLASHROM_PROG, "-c", NOR_CHIP_NAME, "--force"]
+
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+        f.write(bytes(img))
+        img_path = Path(f.name)
+
+    try:
+        if full_erase:
+            log(f"flashrom: writing full {NOR_SIZE // (1024 * 1024)} MB image")
+            subproc(base + ["-w", str(img_path)], "Flashrom")
+        else:
+            layout_lines = []
+            for name in selected:
+                offset = partitions[name]["offset"]
+                end = min(offset + _sector_ceil(sizes[name]), NOR_SIZE) - 1
+                layout_lines.append(f"{offset:08x}:{end:08x} {name}")
+
+            with tempfile.NamedTemporaryFile(suffix=".layout", mode="w", delete=False) as lf:
+                lf.write("\n".join(layout_lines) + "\n")
+                layout_path = Path(lf.name)
+
+            try:
+                image_flags = [flag for name in selected for flag in ("-i", name)]
+                log(f"flashrom: writing regions: {', '.join(selected)}")
+                subproc(base + ["-l", str(layout_path)] + image_flags + ["-w", str(img_path)], "Flashrom")
+            finally:
+                layout_path.unlink(missing_ok=True)
+    finally:
+        img_path.unlink(missing_ok=True)
+
+
+# --- main ---
 
 def main():
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--port", required=True, metavar="DEV",
-                   help="U-Boot serial port (e.g. /dev/ttyUSB0)")
-    p.add_argument("--baud", type=int, default=115200,
-                   help="serial baud rate (default: 115200)")
-    p.add_argument("--openocd-host", default="localhost", metavar="HOST")
-    p.add_argument("--openocd-port", type=int, default=4444, metavar="PORT")
+    p.add_argument("--jtag",     dest="strategy", action="store_const", const="jtag",
+                   help="use JTAG + U-Boot sf (default)")
+    p.add_argument("--flashrom", dest="strategy", action="store_const", const="flashrom",
+                   help="use flashrom via CH341A SPI programmer")
+    p.add_argument("--file",     dest="strategy", action="store_const", const="file",
+                   help=f"assemble full NOR image to {NOR_IMAGE} (implies --all)")
+    p.set_defaults(strategy="jtag")
 
     sel = p.add_argument_group("partition selection (at least one required)")
     sel.add_argument("--all",         action="store_true", help="flash all partitions")
@@ -223,55 +159,91 @@ def main():
     sel.add_argument("--u-boot-env",  action="store_true", help="flash U-Boot env partition")
     sel.add_argument("--factory",     action="store_true", help="flash WiFi EEPROM factory blob")
     sel.add_argument("--recovery",    action="store_true", help="flash OpenWrt recovery kernel")
+    sel.add_argument("--full-erase",  action="store_true",
+                     help=f"erase entire chip before flashing ({NOR_SIZE // (1024 * 1024)} MB, "
+                          f"set via nor->total_size_mb in config.ini)")
     args = p.parse_args()
 
-    if args.all:
+    if args.strategy == "file" or args.all:
         args.u_boot = args.u_boot_env = args.factory = args.recovery = True
 
-    selected = [k for k in ORDERED if getattr(args, k.replace("-", "_"))]
+    partition_binaries = {
+        "u-boot":     UBOOT_BIN,
+        "u-boot-env": UBOOT_ENV_BIN,
+        "factory":    FACTORY_BIN,
+        "recovery":   RECOVERY_BIN,
+    }
+
+    selected = [k for k in partition_binaries if getattr(args, k.replace("-", "_"))]
     if not selected:
         p.error("select at least one partition: --u-boot / --u-boot-env / --factory / --recovery / --all")
 
+    dts = parse_nor_partitions()
+    partitions = {}
+    for label, binary in partition_binaries.items():
+        if label not in dts:
+            err(f"Partition '{label}' not found in DTB")
+        offset, size = dts[label]
+        partitions[label] = {"binary": binary, "offset": offset, "size": size}
+
     for name in selected:
-        part = PARTITIONS[name]
-        if not part["binary"].exists():
-            sys.exit(f"file not found: {part['binary']}")
+        if not partitions[name]["binary"].exists():
+            err(f"file not found: {partitions[name]['binary']}")
 
-    print(f"Connecting to OpenOCD {args.openocd_host}:{args.openocd_port} ...")
+    if args.strategy == "file":
+        _flash_file(selected, partitions)
+        log("Done")
+        return
+
+    if args.strategy == "flashrom":
+        _flash_flashrom(selected, partitions, args.full_erase)
+        log("Done")
+        return
+
+    # JTAG strategy
+    log(f"Connecting to OpenOCD {OPENOCD_HOST}:{OPENOCD_PORT}")
     try:
-        openocd = OpenOCD(args.openocd_host, args.openocd_port)
+        openocd = OpenOCD(OPENOCD_HOST, OPENOCD_PORT)
     except (ConnectionRefusedError, OSError) as e:
-        sys.exit(f"Cannot connect to OpenOCD: {e}")
-    print("Connected.")
+        err(f"Cannot connect to OpenOCD: {e}")
+    log("OpenOCD connected")
 
-    print(f"Opening serial {args.port} @ {args.baud} baud ...")
+    log(f"Opening serial {SERIAL_PORT} @ {SERIAL_BAUD} baud")
     try:
-        uboot = UBoot(args.port, args.baud)
+        uboot = UBoot(SERIAL_PORT, SERIAL_BAUD)
     except serial.SerialException as e:
         openocd.close()
-        sys.exit(f"Cannot open serial port: {e}")
+        err(f"Cannot open serial port: {e}")
 
     if not uboot.sync(timeout=5):
         openocd.close()
         uboot.close()
-        sys.exit("No U-Boot prompt on serial port — is U-Boot running at the => prompt?")
-    print("U-Boot prompt confirmed.\n")
+        err("No U-Boot prompt on serial port — is U-Boot running at the => prompt?")
+    log("U-Boot prompt confirmed")
 
     try:
+        if args.full_erase:
+            log(f"Full chip erase ({NOR_SIZE:#x} bytes)")
+            uboot.sync(timeout=5)
+            out = _ub(uboot, "sf probe", timeout=10)
+            if "Detected" not in out:
+                err("sf probe failed")
+            out = _ub(uboot, f"sf erase 0 {NOR_SIZE:#x}", timeout=600)
+            if "OK" not in out:
+                err("sf erase failed")
+
         for name in selected:
-            part = PARTITIONS[name]
-            flash_partition(
+            _flash_jtag(
                 openocd, uboot,
                 label=name,
-                binary=part["binary"],
-                flash_offset=part["offset"],
-                erase_size=part["erase"],
+                binary=partitions[name]["binary"],
+                flash_offset=partitions[name]["offset"],
             )
     finally:
         openocd.close()
         uboot.close()
 
-    print("\n✓ Done.")
+    log("Done")
 
 
 if __name__ == "__main__":
