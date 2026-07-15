@@ -20,7 +20,7 @@ from lib.log import log, err, oc as _oc
 from lib.config import (
     OPENOCD_HOST, OPENOCD_PORT,
     UBOOT_RAM_BIN, UBOOT_RAM_ADDR,
-    CHIP_ID_ADDR, CHIP_ID_MAGIC, DRAM_SIZE_MB, DRAM_TEST_ADDR,
+    CHIP_ID_ADDR, CHIP_ID_MAGIC, DRAM_SIZE_MB, STAGING_ADDR,
 )
 
 
@@ -58,8 +58,8 @@ def jtag_ram_boot(openocd: OpenOCD) -> None:
         "mt7628.cpu0 configure -work-area-phys 0xa0001000 -work-area-size 4096 -work-area-backup 0",
         timeout=5)
 
-    _oc(openocd, f"mww {DRAM_TEST_ADDR:#x} 0xdeadbeef", timeout=5)
-    got = _mdw(openocd, DRAM_TEST_ADDR)
+    _oc(openocd, f"mww {STAGING_ADDR:#x} 0xdeadbeef", timeout=5)
+    got = _mdw(openocd, STAGING_ADDR)
     if got != 0xdeadbeef:
         err(f"DRAM test failed: wrote 0xdeadbeef, read back {got:#010x}")
     log(f"DRAM test passed: {got:#010x}")

@@ -128,68 +128,35 @@ Without PORST\_N, `halt` catches the CPU wherever it was executing — mid-U-Boo
 
 ---
 
-## Step 2 — Bootstrap PLL and DRAM
+## Step 2 — Bootstrap PLL, DRAM, and boot U-Boot
 
-Connect via telnet as above and run the following in order. Each command must succeed before the next.
+With OpenOCD running and the CPU halted, run from the repo root (inside `nix develop .#uboot`):
 
-### 2a — Verify the crystal strap
-
-```tcl
-mdw 0xb0000010
+```sh
+scripts/boot_uboot_jtag.py
 ```
 
-Reads SYSCFG0. Bit 6 is the hardware XTAL strap:
+The script performs the full sequence automatically:
 
-- `0` → 20/40 MHz crystal — correct for this board
-- `1` → 25 MHz crystal — wrong; PLL init will produce the wrong CPU frequency
+1. Halts the CPU and verifies the PC is at the reset vector (`0x9c000000`)
+2. Reads `0x10000000` and confirms the MT7628 chip ID (`0x3637544d`)
+3. Runs `cpu_pll_init` — locks the PLL to the 40 MHz crystal, sets CPU to 580 MHz
+4. Raises adapter speed to 1000 kHz
+5. Runs `dram_init` with the size from `[jtag]->dram_size_mb` in `scripts/config.ini`
+6. Configures the OpenOCD work area at `0xa0001000` for fast bulk transfers
+7. Writes and reads back `0xdeadbeef` at `[jtag]->dram_test_addr` to verify DRAM
+8. Loads `u-boot/u-boot.bin` to `[jtag]->uboot_ram_addr` via `load_image`
+9. Sets PC and resumes; waits 5 seconds for U-Boot to reach its prompt
 
-If bit 6 reads 1, stop and check the strap and hardware.
+All steps are logged with timestamps. The script exits with an error if any step fails.
 
-### 2b — Initialize the PLL
+### Manual reference (telnet)
 
-```tcl
-cpu_pll_init
-```
-
-- Polls `0xb0000028` to check if the ROM already initialized the PLL — it will not have, since the CPU was halted before the ROM ran.
-- Takes the `CPU_PLL_FROM_XTAL` path: locks the PLL to the 40 MHz crystal.
-- Writes `0x00000101` to CLK_CFG0 (`0xb0000440`), setting CPU and bus clock dividers to 1:1 — CPU now runs at 580 MHz.
-
-The CPU runs from the raw crystal clock until this call completes. That is expected.
-
-### 2c — Initialize DRAM
+The equivalent manual sequence via `telnet localhost 4444`:
 
 ```tcl
-dram_init 256
-```
-
-- Reads SYSCFG0 bit 0 to confirm DDR2 (not DDR1).
-- Pulses the DDR controller reset.
-- Writes the DDR2 PHY configuration registers.
-- Calls [`openocd/memc.tcl`](../openocd/memc.tcl) / `ddr_init` with the 256 MB DDR2 timing words and DQ/DQS delay values.
-
-After this returns, 256 MB of DDR2 is live at physical `0x00000000` (KSEG1 uncached alias: `0xa0000000`). Verify:
-
-```tcl
-mww 0xa0000000 0xdeadbeef
-mdw 0xa0000000
-# expected: 0xa0000000: deadbeef
-```
-
-### 2d — Set the work area
-
-```tcl
-mt7628.cpu0 configure -work-area-phys 0xa0001000 -work-area-size 4096 -work-area-backup 0
-```
-
-Lets OpenOCD use 4 KB at `0xa0001000` as scratch space for bulk operations such as `load_image`. Without this, transfers fall back to slow register-at-a-time writes. `-work-area-backup 0` skips saving and restoring the memory under the work area — safe here since `0xa0001000` is scratch RAM we own.
-
-### Full sequence
-
-```tcl
-targets
+halt
 reg pc
-mdw 0xb0000010
 mdw 0x10000000
 cpu_pll_init
 adapter speed 1000
@@ -197,15 +164,18 @@ dram_init 256
 mt7628.cpu0 configure -work-area-phys 0xa0001000 -work-area-size 4096 -work-area-backup 0
 mww 0xa0000000 0xdeadbeef
 mdw 0xa0000000
+load_image u-boot/u-boot.bin 0x80200000 bin
+reg pc 0x80200000
+resume
 ```
 
-After the last command prints `deadbeef`, the board is initialized and ready to load code.
+For the PLL and DRAM details see the comments in [`openocd/mt7628.cfg`](../openocd/mt7628.cfg) and [`openocd/memc.tcl`](../openocd/memc.tcl).
 
 ---
 
-## Step 3 — Load and Run U-Boot
+## Step 3 — Flash NOR
 
-Continue with [flashing.md §4a](flashing.md#4a--bootstrap-via-jtag-and-smoke-test-u-boot).
+Continue with [flashing.md §4b](flashing.md#4b--full-nor-programming-first-time--production).
 
 ---
 

@@ -11,7 +11,7 @@ Breakout board: <https://github.com/stargate01/vocore2-breakout>
 | Parameter | VoCore2 | Bodybytes |
 |-----------|---------|-----------|
 | RAM | 128 MB DDR2 | 256 MB DDR2 |
-| NOR flash | 32 MB W25Q256 | 64 MB W25Q512JV |
+| NOR flash | 32 MB W25Q256FV | 64 MB W25Q512JV |
 | PORST\_N on JTAG connector | Yes (J6 pin 10) | Not connected |
 | eMMC | 32 GB Hardkernel H2 via reader board + Adafruit 4682 breakout | 128 GB Kingston EMMC128-IY29-5B111 |
 | Recovery trigger | Push button to GND on MDI\_TP\_P1 | TI DRV5032FCDBZT hall-effect sensor on MDI\_TP\_P1 |
@@ -114,10 +114,10 @@ All other steps (PLL init, work area, verify) are identical to [jtag.md §2](jta
 Once OpenOCD is running and listening on port 4444, run the full init + U-Boot load sequence in one shot:
 
 ```sh
-nc -N localhost 4444 < scripts/openocd_run_uboot_vocore2.scr
+scripts/boot_uboot_jtag.py
 ```
 
-This pipes [`scripts/openocd_run_uboot_vocore2.scr`](../scripts/openocd_run_uboot_vocore2.scr) (PLL init, `dram_init 128`, load [`u-boot/u-boot.bin`](../u-boot/u-boot.bin) to `0x80200000`, resume) to the OpenOCD telnet port. OpenOCD processes each command and keeps running after the connection closes. U-Boot output appears on the serial adapter connected to P2TP/P2TN.
+This automates PLL init, `dram_init` (size from `[jtag]->dram_size_mb` in `scripts/config.ini`, default 128 MB — correct for VoCore2), DRAM test, and loading [`u-boot/u-boot.bin`](../u-boot/u-boot.bin) to `0x80200000` via JTAG. U-Boot output appears on the serial adapter connected to P2TP/P2TN.
 
 ---
 
@@ -192,7 +192,7 @@ sgdisk \
   /dev/sdX
 
 # Extract kernel and squashfs rootfs from sysupgrade.bin and write to eMMC
-SYSUPGRADE=openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
+SYSUPGRADE=openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
 tar xf "$SYSUPGRADE" -O 'sysupgrade-bodybytes,bodybytes/kernel' | dd of=/dev/sdX1 bs=4M conv=fsync
 tar xf "$SYSUPGRADE" -O 'sysupgrade-bodybytes,bodybytes/root'   | dd of=/dev/sdX2 bs=4M conv=fsync
 
@@ -207,7 +207,7 @@ Partition 1 holds the raw kernel binary; partition 2 holds the squashfs rootfs (
 
 ## NOR Flash
 
-VoCore2 uses a 32 MB W25Q256. The partition offsets (u-boot at `0x0`, u-boot-env at `0x40000`, factory at `0x50000`, recovery at `0x60000`) are identical to bodybytes; only the total NOR size and the recovery partition end differ. `generate_nor_image.py --nor-size 32` produces a 32 MB image with the recovery partition capped at `0x1FA0000` (31.625 MB) instead of 63.625 MB. The actual recovery kernel is far smaller than either limit.
+VoCore2 uses a Winbond W25Q256FV: 32 MB total, 256-byte page size, 64 KB erase block size. The 64 KB block size matches `CONFIG_ENV_SECT_SIZE=0x10000` exactly — U-Boot's `saveenv` erases one block, and `fw_setenv` issues an erase ioctl for `secsize=0x10000`; both are correct for this chip. The partition offsets (u-boot at `0x0`, u-boot-env at `0x40000`, factory at `0x50000`, recovery at `0x60000`) are identical to bodybytes; only the total NOR size and the recovery partition end differ. Set `total_size_mb = 32` and `chip_name = W25Q256FV` in `scripts/config.ini` before using any NOR scripts on VoCore2 — `flash_nor_images.py --file` then produces a 32 MB image with the recovery partition capped at `0x1FA0000` (31.625 MB) instead of 63.625 MB. The actual recovery kernel is far smaller than either limit.
 
 The recovery boot path (`altbootcmd=run bootcmd_recovery`, `bootcmd_recovery=bootm 0xBC060000`) reads the kernel directly from the NOR memory-mapped window — it does not use `sf read` and does not care about the DTS partition size.
 
@@ -217,29 +217,32 @@ The recovery boot path (`altbootcmd=run bootcmd_recovery`, `bootcmd_recovery=boo
 
 **Before making any changes, dump the stock NOR** (see §Dumping the stock NOR image below) so you can restore VoCore2 to its original state afterwards.
 
-**1 — Build the NOR image:**
+**1 — Set config for VoCore2** (if not already done):
+
+In `scripts/config.ini` set `total_size_mb = 32` and `chip_name = W25Q256FV` in `[nor]`.
+
+**2 — Build the NOR image:**
 
 ```sh
-python3 scripts/generate_nor_image.py --nor-size 32 XX:XX:XX:XX:XX:XX
+scripts/generate_nor_env_wifi_images.py XX:XX:XX:XX:XX:XX
+scripts/flash_nor_images.py --file
 ```
 
-Output: [`assets/vocore2_nor_image.bin`](../assets/vocore2_nor_image.bin) (32 MB).
+Output: `build/bodybytes_nor_image.bin` (32 MB).
 
-**2 — Load the image into RAM via JTAG/OpenOCD:**
+**3 — Flash to NOR:**
 
-```tcl
-# OpenOCD telnet (bodybytes U-Boot already RAM-booted via openocd_run_uboot_vocore2.scr)
-halt
-load_image assets/vocore2_nor_image.bin 0x80000000 bin
-resume
+Via JTAG (U-Boot already RAM-booted, serial port connected):
+
+```sh
+scripts/flash_nor_images.py --full-erase   # erase entire chip first
+scripts/flash_nor_images.py --all          # then write all partitions
 ```
 
-**3 — Write to NOR from the U-Boot prompt:**
+Or via CH341A SPI programmer (board powered off):
 
-```
-sf probe
-sf erase 0 0x2000000
-sf write 0x80000000 0 0x2000000
+```sh
+flashrom -p ch341a_spi -c W25Q256FV --force -w build/bodybytes_nor_image.bin
 ```
 
 **4 — Test recovery:**
@@ -261,7 +264,9 @@ For JTAG RAM-boot development that does not exercise the recovery path, NOR is n
 
 ### Dumping the stock NOR image
 
-A reference dump of the stock VoCore2 NOR is already committed at [`assets/vocore2_nor_backup.bin`](../assets/vocore2_nor_backup.bin). The procedure below is for reference or for re-dumping from different hardware. The NOR is memory-mapped at `0xBC000000` (KSEG1 uncached), so it is directly readable via JTAG without any flash driver.
+The procedure below dumps the stock VoCore2 NOR to `build/vocore2_nor_backup.bin` (`build/` is not tracked; keep the file safe yourself).
+
+> The CH341A method (see §CH341A USB programmer above) is simpler: plug in the programmer, run `flashrom`, done — no JTAG setup or U-Boot required. The JTAG `sf read` method works equally well since U-Boot uses native 4-byte addressing (command 0xB7, entered on `sf probe`) and has no addressing limitations on the W25Q256FV.
 
 **1 — Start OpenOCD and RAM-boot bodybytes U-Boot** (for `sf` command access and fast SPI reads):
 
@@ -275,41 +280,37 @@ openocd -f interface/jlink.cfg \
     -c "reset halt" \
     -c "wait_halt 10000"
 
-nc -N localhost 4444 < scripts/openocd_run_uboot_vocore2.scr
+scripts/boot_uboot_jtag.py
 ```
 
-**2 — Read NOR into RAM via U-Boot** (fast — uses SPI burst reads):
+**2 — Read full NOR into RAM:**
 
 ```
 sf probe
 sf read 0x81000000 0 0x2000000
 ```
 
-Wait for `SF: 33554432 bytes @ 0x0 Read: OK`.
-
-**3 — Halt and dump via OpenOCD**:
+Wait for `SF: 33554432 bytes @ 0x0 Read: OK`, then halt and dump:
 
 ```tcl
 halt
-dump_image assets/vocore2_nor_backup.bin 0xa1000000 0x2000000
+dump_image build/vocore2_nor_backup.bin 0xa1000000 0x2000000
 ```
 
 `0x81000000` (U-Boot KSEG0) = physical `0x01000000` = KSEG1 uncached `0xa1000000`.
 
-At ~4 MHz adapter speed this takes several hours. Use `adapter speed 8000` or higher before the dump to speed it up if the EJTAG link stays stable.
+At ~4 MHz adapter speed a full 32 MB dump takes several hours. Use `adapter speed 8000` or higher if the EJTAG link stays stable.
 
 ### Restoring the stock NOR image
 
-RAM-boot bodybytes U-Boot via JTAG as above, then load the backup into RAM:
+RAM-boot bodybytes U-Boot via JTAG as above, then:
 
 ```tcl
 # OpenOCD telnet
 halt
-load_image assets/vocore2_nor_backup.bin 0x80000000 bin
+load_image build/vocore2_nor_backup.bin 0x80000000 bin
 resume
 ```
-
-At the U-Boot prompt:
 
 ```
 sf probe
@@ -318,6 +319,34 @@ sf write 0x80000000 0 0x2000000
 ```
 
 Power-cycle to boot the restored stock firmware.
+
+### CH341A USB programmer (alternative to JTAG)
+
+The W25Q256FV is a standard SPI NOR. A CH341A USB flash programmer can read and write it directly via the SPI pins on the breakout connector — no JTAG, no U-Boot required. The CH341A supplies 3.3 V to the board; do not connect any other power source. A jumper from RST to GND holds the MT7628 in reset so its SPI controller cannot contend on the bus.
+
+Connect the CH341A to the VoCore2 breakout connector SPI pins, and fit a jumper from RST to GND to hold the MT7628 in reset so it does not drive the SPI bus while the programmer is attached:
+
+| CH341A | VoCore2 breakout |
+|--------|-----------------|
+| CLK | SPI CLK |
+| CS | SPI CS0 |
+| MOSI | SPI MOSI |
+| MISO | SPI MISO |
+| GND | GND |
+| 3.3V | 3.3VO |
+| — | RST → GND (jumper) |
+
+Use `flashrom` with the `ch341a_spi` programmer:
+
+```sh
+# Read entire 32 MB chip to file
+flashrom -p ch341a_spi -c W25Q256FV --progress -r build/vocore2_nor_backup.bin
+
+# Write image to chip (verifies after write)
+flashrom -p ch341a_spi -c W25Q256FV --progress -w build/bodybytes_nor_image.bin
+```
+
+The write command erases each 64 KB block before programming and verifies the result; a full 32 MB write takes a few minutes.
 
 ---
 

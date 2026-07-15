@@ -9,7 +9,7 @@ Source tree: `u-boot/` submodule (tag `v2026.04`) — see [building.md](building
 | [`u-boot/configs/bodybytes_defconfig`](../u-boot/configs/bodybytes_defconfig) | Complete standalone defconfig |
 | [`u-boot/arch/mips/dts/bodybytes,bodybytes.dts`](../u-boot/arch/mips/dts/bodybytes,bodybytes.dts) | Full board device tree |
 | [`u-boot/include/configs/bodybytes.h`](../u-boot/include/configs/bodybytes.h) | Board config header: `CFG_SYS_NS16550_COM3` (UART2 MMIO for SPL legacy path) |
-| [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) | Default environment: `bootcmd`, `bootcmd_normal`, `bootcmd_recovery`, `altbootcmd`, `bootmenu_*`; auto-detected by the build system and compiled into `default_environment[]`; also used directly by [`scripts/generate_nor_image.py`](../scripts/generate_nor_image.py) as `mkenvimage` input |
+| [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) | Default environment: `bootcmd`, `bootcmd_normal`, `bootcmd_recovery`, `altbootcmd`, `bootmenu_*`; auto-detected by the build system and compiled into `default_environment[]`; also used directly by [`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py) as `mkenvimage` input |
 | [`u-boot/board/bodybytes/bodybytes/Kconfig`](../u-boot/board/bodybytes/bodybytes/Kconfig) | Board vendor/name declarations |
 | [`u-boot/board/bodybytes/bodybytes/MAINTAINERS`](../u-boot/board/bodybytes/bodybytes/MAINTAINERS) | File ownership record |
 
@@ -56,7 +56,7 @@ The SPL serial driver also requires `CFG_SYS_NS16550_COM3` (UART2's MMIO address
 
 ### bootcmd, bootcmd\_normal, bootcmd\_recovery
 
-The boot variables live in [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env). The U-Boot build system auto-detects that file (it matches `board/<vendor>/<board>/<SYS_BOARD>.env`) and compiles it into `default_environment[]`. A blank or corrupt `u-boot-env` still boots correctly because U-Boot uses `default_environment[]`. The env partition is pre-programmed at NOR image build time by [`scripts/generate_nor_image.py`](../scripts/generate_nor_image.py), which passes the same [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) to `mkenvimage` — one file, no duplication.
+The boot variables live in [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env). The U-Boot build system auto-detects that file (it matches `board/<vendor>/<board>/<SYS_BOARD>.env`) and compiles it into `default_environment[]`. A blank or corrupt `u-boot-env` still boots correctly because U-Boot uses `default_environment[]`. The env partition is pre-programmed at NOR image build time by [`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py), which passes the same [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) to `mkenvimage` — one file, no duplication.
 
 [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) defines `bootmenu_0` and `bootmenu_1` so the boot menu (`CONFIG_CMD_BOOTMENU=y`, `CONFIG_AUTOBOOT_MENU_SHOW=y`, `CONFIG_BOOTDELAY=5`) shows meaningful entries:
 
@@ -126,9 +126,9 @@ bootm 0x82000000
 
 U-Boot has two env sources: the compiled-in `default_environment[]` array (built from [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) at compile time) and the env partition in NOR flash. When the env partition CRC is valid U-Boot loads from flash exclusively — the compiled-in defaults are never consulted. This means that once any tool has written to the env partition (e.g. the first `fw_setenv` call from OpenWrt), `bootcmd`, `altbootcmd`, and friends must already be present in the partition or they go missing.
 
-[`scripts/generate_nor_image.py`](../scripts/generate_nor_image.py) pre-programs the env partition at offset `0x040000` by calling [`u-boot/tools/mkenvimage`](../u-boot/tools/mkenvimage) (built as part of the normal U-Boot build) with [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) as input. `mkenvimage` produces a correctly formatted 4 KB binary — a 4-byte CRC32 header followed by null-terminated `key=value` pairs and 0xFF padding — which is embedded directly into the NOR image. The env is valid from the very first power-up; every `fw_setenv` call from OpenWrt safely read-modify-writes the partition without losing boot variables.
+[`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py) pre-programs the env partition at offset `0x040000` by calling [`u-boot/tools/mkenvimage`](../u-boot/tools/mkenvimage) (built as part of the normal U-Boot build) with [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) as input. `mkenvimage` produces a correctly formatted 4 KB binary — a 4-byte CRC32 header followed by null-terminated `key=value` pairs and 0xFF padding — which is embedded directly into the NOR image. The env is valid from the very first power-up; every `fw_setenv` call from OpenWrt safely read-modify-writes the partition without losing boot variables.
 
-[`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) is the single source of truth for all boot variables. The U-Boot build compiles it into `default_environment[]` and [`scripts/generate_nor_image.py`](../scripts/generate_nor_image.py) passes it to `mkenvimage` — the same file serves both purposes with no duplication. When adding or changing a boot variable, edit only [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env).
+[`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) is the single source of truth for all boot variables. The U-Boot build compiles it into `default_environment[]` and [`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py) passes it to `mkenvimage` — the same file serves both purposes with no duplication. When adding or changing a boot variable, edit only [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env).
 
 A blank or corrupt env partition still falls back to the compiled-in defaults so the device always boots. If the env is erased (e.g. by a U-Boot-only flash update), run `saveenv` at the U-Boot prompt to write the compiled-in defaults back to flash.
 
@@ -175,6 +175,37 @@ The eMMC uses a GPT partition layout. Four additional options are set in [`u-boo
 **Speed** — the MT7628 RFB defconfig leaves `CONFIG_SF_DEFAULT_SPEED` and `CONFIG_ENV_SPI_MAX_HZ` at 1 MHz. `CONFIG_ENV_SPI_MAX_HZ` controls env save/restore independently and is not overridden by the DTS `spi-max-frequency`; both are set to 25 MHz in [`u-boot/configs/bodybytes_defconfig`](../u-boot/configs/bodybytes_defconfig).
 
 Note: the MT7621 SPI controller is half-duplex and does not support quad or dual I/O. `CONFIG_SPI_FLASH_SMART_HWCAPS=y` already ensures the driver will not attempt modes the controller cannot handle.
+
+### D-cache disabled
+
+**`CONFIG_MIPS_CACHE_DISABLE=y`** — all other MT7628 boards in the tree (vocore2, mt7628_rfb, linkit-7688) carry this flag; bodybytes follows the same pattern.
+
+With `CONFIG_MIPS_CACHE_SETUP=y` and `CONFIG_MIPS_CACHE_DISABLE=y` set together, the generic MIPS start code initialises the cache arrays (required on 24KEc to avoid tag parity faults) and then immediately disables them. U-Boot runs fully uncached for its entire lifetime.
+
+**Why this matters for JTAG flashing:** [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) loads a binary into DRAM via OpenOCD `load_image` (PRACC — the CPU executes the write through its virtual address space), then issues `sf write <addr>` from U-Boot to program NOR. Without cache disabled, the D-cache can hold stale lines over the physical DRAM that JTAG just wrote; `sf write` then reads those stale lines rather than the newly written data, silently programming garbage into NOR. With cache disabled, every load and store goes directly to DRAM — JTAG writes are immediately visible to U-Boot with no coherency step required.
+
+**Linux is unaffected.** The MIPS kernel unconditionally re-enables and re-configures the caches during early `cpu_probe` / `cpu_cache_init` before any driver or userspace code runs.
+
+### DRAM initialization (SPL)
+
+The MT7628 has no on-chip SRAM. The SPL therefore cannot run C code until it has both an initialized cache and a stack, which creates a chicken-and-egg problem: DRAM must be initialized to provide a stack, but C code is needed to initialize DRAM.
+
+The MediaTek port resolves this with a cache-as-SRAM trick, driven by `SOC_MT7628` auto-selecting `MIPS_INIT_STACK_IN_SRAM`, `MIPS_SRAM_INIT`, and `SYS_MIPS_CACHE_INIT_RAM_LOAD` in [`u-boot/arch/mips/mach-mtmips/Kconfig`](../u-boot/arch/mips/mach-mtmips/Kconfig).
+
+**SPL start sequence** ([`arch/mips/cpu/start.S`](../u-boot/arch/mips/cpu/start.S)):
+
+| Step | Code | Effect |
+|------|------|--------|
+| 1 | `mips_cache_disable` | CP0_CONFIG[K0] = UNCACHED (2). Cache hardware still present — just not serving KSEG0 |
+| 2 | `mips_sram_init` | Zeros I/D cache tag arrays (prevents parity faults). Then re-enables KSEG0 as cacheable and locks 16 KB of D-cache (`CACHE_STACK_BASE`…+0x4000) with VALID+DIRTY+LOCK — these lines act as fake SRAM |
+| 3 | `setup_stack_gd` | Sets sp = `SYS_INIT_SP_ADDR` (0x80080000, KSEG0). Accesses hit the locked D-cache; no DRAM access occurs |
+| 4 | `lowlevel_init` → `mt7628_init()` | Calls `mt7628_ddr_init()` in [`arch/mips/mach-mtmips/mt7628/ddr.c`](../u-boot/arch/mips/mach-mtmips/mt7628/ddr.c): detects DDR type (DDR1/DDR2) and package variant from SYSCFG0, selects the matching timing table, runs `ddr1_init()`/`ddr2_init()`, calibrates DQ/DQS delays. Sets `gd->ram_size`. After return: flushes locked D-cache lines to real DRAM (`HIT_WRITEBACK_INV_D`), then sets KSEG0 uncached again |
+| 5 | `mips_cache_reset` | Full cache-tag re-initialization. Leaves CP0_CONFIG[K0] unchanged (uncached) |
+| 6 | `board_init_f` | `spl_init()`, serial init, then `board_init_r()` loads U-Boot proper from NOR via `spl_nor_get_uboot_base()` (first image after `__image_copy_end`, skipping an optional FDT blob) |
+
+**Why `CONFIG_SKIP_LOWLEVEL_INIT=y` does not break the SPL.** `CONFIG_IS_ENABLED(X)` in an SPL build resolves to `CONFIG_SPL_X` (not `CONFIG_X`). `CONFIG_SPL_SKIP_LOWLEVEL_INIT` is not set in the defconfig, so the macro evaluates to false inside SPL — `lowlevel_init` is called and DRAM is initialized. In U-Boot proper (non-SPL build) the macro resolves to `CONFIG_SKIP_LOWLEVEL_INIT=y`, so `lowlevel_init` is correctly skipped — DRAM is already up.
+
+**DRAM type and size are fully auto-detected at runtime.** `mt7628_ddr_init()` reads `SYSCTL_SYSCFG0_REG` for DDR type and `SYSCTL_CHIP_REV_ID_REG` for the package ID (KN package forces DDR1), and `SYSCTL_CLKCFG0_REG` to choose between 160 MHz and 200 MHz timing tables. The timing tables in `ddr.c` cover DDR1 and DDR2 at both speeds in sizes from 8 MB to 256 MB. No board-specific DRAM configuration is required.
 
 ### eMMC DTS: SD vs eMMC profile
 

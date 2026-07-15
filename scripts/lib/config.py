@@ -27,8 +27,6 @@ UBOOT_RAM_ADDR = _x("jtag", "uboot_ram_addr")
 CHIP_ID_ADDR   = _x("jtag", "chip_id_addr")
 CHIP_ID_MAGIC  = _x("jtag", "chip_id_magic")
 DRAM_SIZE_MB   = _x("jtag", "dram_size_mb")
-DRAM_TEST_ADDR = _x("jtag", "dram_test_addr")
-
 STAGING_ADDR   = _x("jtag", "staging_addr")
 
 NOR_SIZE              = int(_ini["nor"]["total_size_mb"]) * 1024 * 1024

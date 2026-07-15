@@ -25,7 +25,9 @@ Stores `u-boot-with-spl.bin`: SPL (≤64 KB) followed by LZMA-compressed U-Boot 
 
 **`u-boot-env` (0x040000, 64 KB)**
 
-One 64 KB erase block. `CONFIG_ENV_OFFSET=0x040000`, `CONFIG_ENV_SIZE=0x1000` (4 KB active payload), `CONFIG_ENV_SECT_SIZE=0x10000`. U-Boot erases and rewrites this block on `saveenv`. Pre-programmed by [`scripts/generate_nor_image.py`](../scripts/generate_nor_image.py) via [`u-boot/tools/mkenvimage`](../u-boot/tools/mkenvimage) using [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) — the env is valid from the very first power-up. The partition is left writable in the OpenWrt DTS so that `fw_setenv` (from the `u-boot-envtools` package) can update variables at runtime — for example, to arm the boot counter before a sysupgrade.
+One 64 KB erase block. `CONFIG_ENV_OFFSET=0x040000`, `CONFIG_ENV_SIZE=0x1000` (4 KB active payload), `CONFIG_ENV_SECT_SIZE=0x10000`. U-Boot erases and rewrites this block on `saveenv`. Pre-programmed by [`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py) via [`u-boot/tools/mkenvimage`](../u-boot/tools/mkenvimage) using [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) — the env is valid from the very first power-up. The partition is left writable in the OpenWrt DTS so that `fw_setenv` (from the `u-boot-envtools` package) can update variables at runtime — for example, to arm the boot counter before a sysupgrade.
+
+The DTS partition size is `0x10000` (one full erase block) even though `CONFIG_ENV_SIZE` is only `0x1000`. This is required: NOR flash can only be erased in whole sectors (64 KB on the W25Q512JV). Both U-Boot's `saveenv` (which erases `CONFIG_ENV_SECT_SIZE` bytes) and Linux's `fw_setenv` (which issues an erase ioctl for `secsize=0x10000` bytes against `/dev/mtdN`) would fail if the MTD partition were smaller than one sector. The `envsize=0x1000` / `secsize=0x10000` split in the uboot-envtools config (`ubootenv_add_mtd "u-boot-env" "0x0" "0x1000" "0x10000"`) correctly reflects this: 4 KB of active env data within a 64 KB erase unit.
 
 **`factory` (0x050000, 64 KB)**
 
@@ -84,7 +86,7 @@ The first two bytes should read `28 76` (chip ID `0x7628` LE). Then dump via Ope
 dump_image vocore2_factory.bin 0xBC040000 0x10000
 ```
 
-Reference EEPROM values extracted from [`assets/vocore2_nor_backup.bin`](../assets/vocore2_nor_backup.bin) factory partition (VoCore2, NOR offset `0x40000`):
+Reference EEPROM values extracted from `build/vocore2_nor_backup.bin` factory partition (VoCore2, NOR offset `0x40000`):
 
 | Offset | VoCore2 value | Bodybytes | Note |
 |--------|---------------|-----------|------|
@@ -97,53 +99,63 @@ Reference EEPROM values extracted from [`assets/vocore2_nor_backup.bin`](../asse
 
 The VoCore2 has RF calibration burned from factory testing. Bodybytes zeroes those fields and relies on the eFuse path — this is the designed use case for `mediatek,eeprom-merge-otp`.
 
-### 2c — What [`scripts/generate_nor_image.py`](../scripts/generate_nor_image.py) writes
+### 2c — What [`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py) writes
 
 The script produces a correctly formatted 1 KB EEPROM blob embedded in the `factory` partition:
 
 ```python
 eeprom = bytearray(0x400)        # 1 KB, all zeros
 eeprom[0x00:0x02] = b'\x28\x76'  # chip ID 0x7628 LE
-eeprom[0x04:0x0a] = mac_bytes    # 6-byte MAC from --mac argument
+eeprom[0x04:0x0a] = mac_bytes    # 6-byte MAC
 # bytes 0x0a–0x3FF: zero; eFuse merge fills RF cal fields at boot
 ```
 
 ---
 
-## 3 — Assemble NOR image
+## 3 — Generate build artifacts
 
-From the repo root:
+From the repo root (enter the dev shell first: `nix develop .#uboot`):
 
 ```sh
-scripts/generate_nor_image.py AA:BB:CC:DD:EE:FF
+# MAC address defaults to the value in scripts/config.ini [wifi]->mac_address
+scripts/generate_nor_env_wifi_images.py
+
+# Override MAC for a different unit:
+scripts/generate_nor_env_wifi_images.py AA:BB:CC:DD:EE:FF
 ```
 
-Produces [`assets/bodybytes_nor_image.bin`](../assets/bodybytes_nor_image.bin) (64 MB, all gaps `0xFF`) containing:
+Produces `build/bodybytes_nor_uboot_env.bin` (U-Boot env partition image) and `build/bodybytes_nor_wifi_factory.bin` (WiFi EEPROM blob). These are required by both the JTAG and CH341A programming paths.
+
+For CH341A programming only — assemble the full NOR image:
+
+```sh
+scripts/flash_nor_images.py --file
+```
+
+Produces `build/bodybytes_nor_image.bin` (size from `[nor]->total_size_mb` in `scripts/config.ini`, all gaps `0xFF`) and prints the `flashrom` command to program it. Contents:
 
 | Offset | Content |
 |--------|---------|
 | `0x000000` | [`u-boot/u-boot-with-spl.bin`](../u-boot/u-boot-with-spl.bin) |
-| `0x040000` | U-Boot env, pre-programmed by [`u-boot/tools/mkenvimage`](../u-boot/tools/mkenvimage) from [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) |
-| `0x050000` | 1 KB WiFi EEPROM blob (chip ID `0x7628` + MAC from `--mac`) |
-| `0x060000` | [`openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin) |
-
-The script also prints the two `sf` commands needed to program the image from U-Boot. Use `--out` to override the output path.
+| `0x040000` | U-Boot env (`build/bodybytes_nor_uboot_env.bin`) |
+| `0x050000` | WiFi EEPROM blob (`build/bodybytes_nor_wifi_factory.bin`) |
+| `0x060000` | [`openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin) |
 
 ---
 
 ## 4 — Program SPI NOR
 
-### 4a — Bootstrap via JTAG and smoke-test U-Boot
+All scripted flashing uses the Python scripts in `scripts/`. Configuration (serial port, OpenOCD address, NOR size, etc.) lives in [`scripts/config.ini`](../scripts/config.ini). Run all scripts from the repo root inside the dev shell (`nix develop .#uboot`).
 
-Follow [jtag.md](jtag.md) §1 and §2 to verify JTAG connectivity and initialise PLL and DRAM.
+### 4a — Bootstrap via JTAG and bring up U-Boot in RAM
 
-Load `u-boot.bin` into RAM from the OpenOCD telnet prompt:
+Follow [jtag.md](jtag.md) §1 to connect OpenOCD and halt the CPU. Then run:
 
-```tcl
-load_image u-boot/u-boot.bin 0x80200000 bin
-reg pc 0x80200000
-resume
+```sh
+scripts/boot_uboot_jtag.py
 ```
+
+This script automates the full bring-up sequence: verifies the PC and chip ID, initialises PLL and DRAM, tests DRAM, loads `u-boot/u-boot.bin` into RAM via JTAG, and resumes execution. It waits 5 seconds for U-Boot to reach its prompt and exits once done.
 
 U-Boot should appear on **UART2 (TP19/TP20)** at **115200 8N1**:
 
@@ -151,48 +163,42 @@ U-Boot should appear on **UART2 (TP19/TP20)** at **115200 8N1**:
 picocom -b 115200 --flow n /dev/ttyUSB0
 ```
 
-If there is no output: confirm `CONFIG_CONS_INDEX=3` is set, the binary was rebuilt, the terminal is **115200 8N1**, and the JTAG bootstrap completed successfully.
-
 Do not continue until U-Boot runs correctly from RAM. If it does not execute reliably from RAM it will not execute correctly after being programmed into NOR.
 
 ### 4b — Full NOR programming (first-time / production)
 
-Bodybytes has no Ethernet; the only way to transfer the image is via JTAG. Load [`assets/bodybytes_nor_image.bin`](../assets/bodybytes_nor_image.bin) into RAM while U-Boot idles at its prompt (no halt needed):
+With U-Boot running at its prompt, flash all partitions in one pass:
 
-```tcl
-load_image assets/bodybytes_nor_image.bin 0x80000000 bin
+```sh
+scripts/flash_nor_images.py --full-erase   # erase entire chip first
+scripts/flash_nor_images.py --all          # then write all partitions
 ```
 
-Then run the two `sf` commands printed by [`scripts/generate_nor_image.py`](../scripts/generate_nor_image.py) at the U-Boot console:
+`--full-erase` and partition flags are mutually exclusive — run erase separately, then flash. `--full-erase` wipes the entire chip (size from `[nor]->total_size_mb` in `scripts/config.ini`). The subsequent `--all` loads each binary into RAM via JTAG, resumes U-Boot, and writes it to NOR using `sf` at the correct offsets from the U-Boot DTB.
 
-```
-sf probe
-sf erase 0 0x4000000
-sf write 0x80000000 0 0x4000000
-```
+Alternatively, program via CH341A SPI programmer without involving U-Boot (board must be powered off). Run `--file` (§3) to assemble the image — it prints the exact `flashrom` command to use:
 
-This erases and rewrites the full 64 MB in one pass. All partition contents — U-Boot, env, factory EEPROM, and recovery kernel — are already assembled in the image at their correct offsets.
-
-Alternatively, write [`assets/bodybytes_nor_image.bin`](../assets/bodybytes_nor_image.bin) directly with a SPI flash programmer (e.g. `flashrom`) without involving U-Boot at all.
-
-### 4c — U-Boot-only update (development)
-
-For iterating on U-Boot without touching the factory or recovery partitions, load just `u-boot-with-spl.bin` while U-Boot is running at its prompt:
-
-```tcl
-# OpenOCD telnet
-load_image u-boot/u-boot-with-spl.bin 0x80080000 bin
+```sh
+scripts/flash_nor_images.py --file
+# → prints: flashrom -p ch341a_spi -c <chip> --force -w build/bodybytes_nor_image.bin
 ```
 
-Note the byte count from `load_image`, then at the U-Boot console:
+### 4c — Incremental update (development)
 
-```
-sf probe
-sf erase 0 0x50000
-sf write 0x80080000 0 0x<byte_count_hex>
+To re-flash individual partitions without a full chip erase:
+
+```sh
+# U-Boot only
+scripts/flash_nor_images.py --u-boot
+
+# Recovery only
+scripts/flash_nor_images.py --recovery
+
+# Env + factory
+scripts/flash_nor_images.py --u-boot-env --factory
 ```
 
-This erases u-boot + env (preserving factory at `0x050000`) and writes the new binary. The env partition is erased — run `saveenv` at the U-Boot prompt on the next boot to write the compiled-in defaults back to flash. Power-cycle to boot from the updated NOR.
+Each partition is erased to its DTS-defined size before writing. The env partition is erased — run `saveenv` at the U-Boot prompt on the next boot to restore the compiled-in defaults. Power-cycle to boot from the updated NOR.
 
 ### 4d — Verify NOR boot
 
@@ -208,14 +214,16 @@ U-Boot should appear on **UART2 (TP19/TP20)** at **115200 8N1** without any JTAG
 
 ### 5a — GPT partition layout
 
-| # | Label | Type | Size | Content |
-|---|-------|------|------|---------|
-| 1 | `kernel` | Linux filesystem | 32 MB | Regular kernel binary (raw uImage); U-Boot reads from the partition start; sysupgrade writes here |
-| 2 | `rootfs` | Linux filesystem | 512 MB | squashfs rootfs; written by sysupgrade; preinit mounts read-only |
-| 3 | `rootfs_data` | Linux filesystem | 4 GB | ext4; auto-mounted at `/overlay` by libfstools on every boot; all `opkg install` output lands here |
-| 4 | `data` | Linux filesystem | ~123.5 GB (remainder) | ext4; file server storage, auto-mounted at `/mnt/data` by block-mount |
+All four partitions use the "Linux filesystem" GPT type GUID (`0FC63DAF…`), set automatically by `parted mkpart` without an explicit filesystem type. The GPT type does not enforce any filesystem; only p3 and p4 have actual filesystems.
 
-`kernel` and `rootfs` hold raw binary data, not filesystems. U-Boot reads a 32 MB window from the start of `kernel` and passes it to `bootm`; the uImage header contains the actual image size. preinit's `mount_root` scans block devices for squashfs magic; there is no `root=` kernel argument.
+| # | Label | Filesystem | Size | Content |
+|---|-------|-----------|------|---------|
+| 1 | `kernel` | none (raw) | 32 MB | Raw FIT image (LZMA kernel + DTB); written by sysupgrade via `dd`; read by U-Boot via `mmc read` |
+| 2 | `rootfs` | none (raw) | 512 MB | Raw squashfs rootfs; written by sysupgrade via `dd`; mounted read-only by the kernel |
+| 3 | `rootfs_data` | ext4 | 4 GB | Overlay for OpenWrt packages and config; auto-mounted at `/overlay` by libfstools on every boot |
+| 4 | `data` | ext4 | ~123.5 GB (remainder) | User file storage; auto-mounted at `/mnt/data` by block-mount |
+
+`kernel` and `rootfs` hold raw binary data — no filesystem is created on them during first install, and sysupgrade raw-writes them with `dd` on every upgrade. U-Boot reads the full `kernel` partition (32 MB) via `mmc read` and passes the buffer to `bootm`; `bootm` parses the FIT header to locate the LZMA kernel and DTB nodes, decompresses the kernel, applies memory and bootargs fixup to the extracted DTB, and boots. `root=/dev/mmcblk0p2 rootwait` in the main DTB's `chosen/bootargs` node tells the kernel where to find the squashfs rootfs.
 
 The `rootfs_data` label is the standard libfstools extroot partition name. `fstools` mounts it at `/overlay` automatically at every boot with no UCI fstab entry required.
 
@@ -245,17 +253,17 @@ These sizes match the GPT layout in §5a. `parted` uses the partition name as th
 
 Transfer `sysupgrade.bin` to the device and run sysupgrade. Either:
 
-*Via LuCI web interface:* open `http://192.168.1.1` → System → Backup / Flash Firmware → Flash new firmware image → upload [`openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin).
+*Via LuCI web interface:* open `http://192.168.1.1` → System → Backup / Flash Firmware → Flash new firmware image → upload [`openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin).
 
 *Via SSH:*
 
 ```sh
 # On the host — transfer sysupgrade.bin to the device's RAM
-scp openwrt/bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin \
+scp openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin \
     root@192.168.1.1:/tmp/
 
 # On the device
-sysupgrade -n /tmp/openwrt-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
+sysupgrade -n /tmp/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
 ```
 
 `emmc_do_upgrade` finds `kernel` and `rootfs` partitions by GPT label, writes the kernel and squashfs, and reboots into the new firmware. All subsequent upgrades follow the same flow (web UI or `sysupgrade`), without the partitioning step.
@@ -296,7 +304,7 @@ U-Boot reads GPIO#14 at startup before attempting any boot:
 
 ### 6b — bootcmd
 
-The full boot logic — hall sensor check, `bootcmd_recovery`, and `bootcmd_normal` — is defined in [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env), which the U-Boot build auto-detects and compiles into `default_environment[]`. The env partition is pre-programmed by [`scripts/generate_nor_image.py`](../scripts/generate_nor_image.py) using the same file via [`u-boot/tools/mkenvimage`](../u-boot/tools/mkenvimage), so the env is valid from the very first power-up. `fw_setenv` calls from OpenWrt read-modify-write the partition, preserving the boot commands across all sysupgrade cycles.
+The full boot logic — hall sensor check, `bootcmd_recovery`, and `bootcmd_normal` — is defined in [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env), which the U-Boot build auto-detects and compiles into `default_environment[]`. The env partition is pre-programmed by [`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py) using the same file via [`u-boot/tools/mkenvimage`](../u-boot/tools/mkenvimage), so the env is valid from the very first power-up. `fw_setenv` calls from OpenWrt read-modify-write the partition, preserving the boot commands across all sysupgrade cycles.
 
 A blank or corrupt env partition always falls back to the compiled-in values, so the device can recover even if the env partition is erased. To manually persist a customisation after changing a variable at the U-Boot prompt:
 
@@ -304,7 +312,7 @@ A blank or corrupt env partition always falls back to the compiled-in values, so
 saveenv
 ```
 
-`gpio read 14` returns 0 (success/true in U-Boot `if`) when GPIO#14 is low — magnet present → recovery. `part start mmc 0 1 ks` stores the sector offset of GPT partition 1 (`kernel`) into `${ks}`; `mmc read` then loads 0x10000 sectors (32 MB) from there. `bootm` reads the actual image size from the uImage header and ignores trailing data. `0xBC060000` is the NOR memory-mapped address of the recovery partition (NOR physical `0x1C060000`, KSEG1 uncached alias).
+`gpio read 14` returns 0 (success/true in U-Boot `if`) when GPIO#14 is low — magnet present → recovery. `part start mmc 0 1 kern_start` and `part size mmc 0 1 kern_blocks` store the LBA start and sector count of GPT partition 1 (`kernel`); `mmc read` loads those sectors into RAM. `bootm` then parses the FIT image to extract and boot the kernel with the embedded DTB. `0xBC060000` is the NOR memory-mapped address of the recovery partition (NOR physical `0x1C060000`, KSEG1 uncached alias).
 
 `CONFIG_CMD_PART=y` and `CONFIG_EFI_PARTITION=y` must be set in `bodybytes_defconfig` for `part start` to work — see [uboot.md](uboot.md).
 
@@ -312,13 +320,13 @@ saveenv
 
 Normal boot:
 1. U-Boot reads GPIO#14 → high → runs `bootcmd_normal`
-2. Reads GPT partition 1 (`kernel`) from eMMC into RAM at `0x82000000`
-3. `bootm 0x82000000` decompresses the regular kernel; the kernel's built-in minimal initramfs runs preinit which calls `mount_root`
-4. `mount_root` (fstools) scans block devices for squashfs magic, finds p2 (`rootfs`), and mounts it read-only; then detects the `rootfs_data` GPT label on p3 and layers it at `/overlay` via overlayfs
+2. Sets `bootargs` to `console=ttyS2,115200 root=/dev/mmcblk0p2 rootwait`, then reads GPT partition 1 (`kernel`) from eMMC into RAM at `kernel_addr_r` (0x82000000) using `part start`/`part size` + `mmc read`
+3. `bootm 0x82000000` parses the FIT image: extracts and decompresses the kernel, extracts the DTB, applies memory and bootargs fixup to the DTB, then jumps to the kernel entry
+4. Linux mounts squashfs rootfs (p2) as root; libfstools (fstools) detects the `rootfs_data` GPT label on p3 and layers it at `/overlay` via overlayfs
 
 Recovery boot:
 1. U-Boot reads GPIO#14 → low → runs `bootcmd_recovery`
-2. `bootm 0xBC060000` reads the uImage header from NOR, decompresses the initramfs kernel to RAM, and boots
+2. `bootm 0xBC060000` parses the FIT image from NOR, decompresses the initramfs kernel to RAM, and boots with the embedded DTB
 3. OpenWrt runs entirely from RAM; eMMC is untouched and available for repair
 
 ---

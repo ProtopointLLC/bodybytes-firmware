@@ -1,4 +1,3 @@
-import subprocess
 import sys
 import time
 
@@ -53,12 +52,3 @@ def ub(uboot: UBoot, cmd: str, timeout: float = SERIAL_TIMEOUT) -> str:
         print(f"{ts()} [U-Boot] < {line}")
     return out
 
-def subproc(cmd: list[str], label: str) -> None:
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    for line in proc.stdout:
-        clean = _printable(line)
-        if clean:
-            print(f"{ts()} [{label}] {clean}")
-    proc.wait()
-    if proc.returncode != 0:
-        err(f"{label} exited with code {proc.returncode}")
