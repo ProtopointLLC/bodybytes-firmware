@@ -25,7 +25,7 @@ Stores `u-boot-with-spl.bin`: SPL (≤64 KB) followed by LZMA-compressed U-Boot 
 
 **`u-boot-env` (0x040000, 64 KB)**
 
-One 64 KB erase block. `CONFIG_ENV_OFFSET=0x040000`, `CONFIG_ENV_SIZE=0x1000` (4 KB active payload), `CONFIG_ENV_SECT_SIZE=0x10000`. U-Boot erases and rewrites this block on `saveenv`. Pre-programmed by [`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py) via [`u-boot/tools/mkenvimage`](../u-boot/tools/mkenvimage) using [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) — the env is valid from the very first power-up. The partition is left writable in the OpenWrt DTS so that `fw_setenv` (from the `u-boot-envtools` package) can update variables at runtime — for example, to arm the boot counter before a sysupgrade.
+One 64 KB erase block. `CONFIG_ENV_OFFSET=0x040000`, `CONFIG_ENV_SIZE=0x1000` (4 KB active payload), `CONFIG_ENV_SECT_SIZE=0x10000`. U-Boot erases and rewrites this block on `saveenv`. Generated on the fly by [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) via [`u-boot/tools/mkenvimage`](../u-boot/tools/mkenvimage) using [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env), with the `recovery_size` variable patched to the exact size of the recovery binary (rounded up to sector alignment) before invoking `mkenvimage` — the env is valid from the very first power-up. The partition is left writable in the OpenWrt DTS so that `fw_setenv` (from the `u-boot-envtools` package) can update variables at runtime — for example, to arm the boot counter before a sysupgrade.
 
 The DTS partition size is `0x10000` (one full erase block) even though `CONFIG_ENV_SIZE` is only `0x1000`. This is required: NOR flash can only be erased in whole sectors (64 KB on the W25Q512JV). Both U-Boot's `saveenv` (which erases `CONFIG_ENV_SECT_SIZE` bytes) and Linux's `fw_setenv` (which issues an erase ioctl for `secsize=0x10000` bytes against `/dev/mtdN`) would fail if the MTD partition were smaller than one sector. The `envsize=0x1000` / `secsize=0x10000` split in the uboot-envtools config (`ubootenv_add_mtd "u-boot-env" "0x0" "0x1000" "0x10000"`) correctly reflects this: 4 KB of active env data within a 64 KB erase unit.
 
@@ -35,9 +35,9 @@ Holds a 1 KB WiFi EEPROM blob at the start; remaining 63 KB is 0xFF. The DTS exp
 
 **`recovery` (0x060000, 63.625 MB)**
 
-OpenWrt initramfs kernel (`initramfs-kernel.bin`), stored read-only. Boots directly from the NOR memory-mapped window at `0xBC060000` when U-Boot detects the recovery trigger (GPIO#14 low). The initramfs image is self-contained — kernel + rootfs packed into a single uImage; no separate squashfs mount from NOR or eMMC is needed. The running recovery system is entirely in RAM and cannot modify NOR, making it a safe environment to repair a broken eMMC.
+OpenWrt initramfs kernel (`initramfs-kernel.bin`), stored read-only. When U-Boot detects the recovery trigger (GPIO#14 low) it runs `bootcmd_recovery`: `sf probe` switches the W25Q512JV to 4-byte addressing, `sf read` copies `recovery_size` bytes from NOR offset `0x60000` into RAM, then `bootm` boots from RAM. The initramfs image is self-contained — kernel + rootfs packed into a single FIT image; no separate squashfs mount from NOR or eMMC is needed. The running recovery system is entirely in RAM and cannot modify NOR, making it a safe environment to repair a broken eMMC.
 
-Spans the W25Q512JV EAR (Extended Address Register) boundary at 16 MB; `CONFIG_SPI_FLASH_BAR=y` makes U-Boot cross 16 MB boundaries transparently:
+The recovery partition spans the W25Q512JV EAR (Extended Address Register) boundary at 16 MB. `sf read` uses the SPI driver with `CONFIG_SPI_FLASH_BAR=y`, which updates the EAR before each cross-boundary read and can address all four 16 MB regions transparently. `recovery_size` is sized to exactly cover the recovery binary (rounded to NOR sector alignment), so only the needed data is transferred.
 
 | EAR | Address range | Region |
 |-----|---------------|--------|
@@ -99,7 +99,7 @@ Reference EEPROM values extracted from `build/vocore2_nor_backup.bin` factory pa
 
 The VoCore2 has RF calibration burned from factory testing. Bodybytes zeroes those fields and relies on the eFuse path — this is the designed use case for `mediatek,eeprom-merge-otp`.
 
-### 2c — What [`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py) writes
+### 2c — What [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) generates for u-boot-env and factory
 
 The script produces a correctly formatted 1 KB EEPROM blob embedded in the `factory` partition:
 
@@ -112,33 +112,25 @@ eeprom[0x04:0x0a] = mac_bytes    # 6-byte MAC
 
 ---
 
-## 3 — Generate build artifacts
+## 3 — Assemble full NOR image (CH341A only)
 
-From the repo root (enter the dev shell first: `nix develop .#uboot`):
+For CH341A programming, assemble the full NOR image from the repo root (enter the dev shell first: `nix develop .#uboot`):
 
 ```sh
 # MAC address defaults to the value in scripts/config.ini [wifi]->mac_address
-scripts/generate_nor_env_wifi_images.py
+scripts/flash_nor_images.py --file
 
 # Override MAC for a different unit:
-scripts/generate_nor_env_wifi_images.py AA:BB:CC:DD:EE:FF
+scripts/flash_nor_images.py --file --mac AA:BB:CC:DD:EE:FF
 ```
 
-Produces `build/bodybytes_nor_uboot_env.bin` (U-Boot env partition image) and `build/bodybytes_nor_wifi_factory.bin` (WiFi EEPROM blob). These are required by both the JTAG and CH341A programming paths.
-
-For CH341A programming only — assemble the full NOR image:
-
-```sh
-scripts/flash_nor_images.py --file
-```
-
-Produces `build/bodybytes_nor_image.bin` (size from `[nor]->total_size_mb` in `scripts/config.ini`, all gaps `0xFF`) and prints the `flashrom` command to program it. Contents:
+The u-boot-env and factory blobs are generated on the fly — no pre-build step required. Produces `build/bodybytes_nor_image.bin` (size from `[nor]->total_size_mb` in `scripts/config.ini`, all gaps `0xFF`) and prints the `flashrom` command to program it. Contents:
 
 | Offset | Content |
 |--------|---------|
 | `0x000000` | [`u-boot/u-boot-with-spl.bin`](../u-boot/u-boot-with-spl.bin) |
-| `0x040000` | U-Boot env (`build/bodybytes_nor_uboot_env.bin`) |
-| `0x050000` | WiFi EEPROM blob (`build/bodybytes_nor_wifi_factory.bin`) |
+| `0x040000` | U-Boot env (generated by `mkenvimage` with `recovery_size` patched in) |
+| `0x050000` | WiFi EEPROM blob (chip ID + MAC) |
 | `0x060000` | [`openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin) |
 
 ---
@@ -304,7 +296,7 @@ U-Boot reads GPIO#14 at startup before attempting any boot:
 
 ### 6b — bootcmd
 
-The full boot logic — hall sensor check, `bootcmd_recovery`, and `bootcmd_normal` — is defined in [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env), which the U-Boot build auto-detects and compiles into `default_environment[]`. The env partition is pre-programmed by [`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py) using the same file via [`u-boot/tools/mkenvimage`](../u-boot/tools/mkenvimage), so the env is valid from the very first power-up. `fw_setenv` calls from OpenWrt read-modify-write the partition, preserving the boot commands across all sysupgrade cycles.
+The full boot logic — hall sensor check, `bootcmd_recovery`, and `bootcmd_normal` — is defined in [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env), which the U-Boot build auto-detects and compiles into `default_environment[]`. The env partition is generated on the fly by [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) using the same file as `mkenvimage` input, with `recovery_size` patched to the exact size of the recovery binary before invocation — the env is valid from the very first power-up. `fw_setenv` calls from OpenWrt read-modify-write the partition, preserving the boot commands across all sysupgrade cycles.
 
 A blank or corrupt env partition always falls back to the compiled-in values, so the device can recover even if the env partition is erased. To manually persist a customisation after changing a variable at the U-Boot prompt:
 
@@ -312,7 +304,7 @@ A blank or corrupt env partition always falls back to the compiled-in values, so
 saveenv
 ```
 
-`gpio read 14` returns 0 (success/true in U-Boot `if`) when GPIO#14 is low — magnet present → recovery. `part start mmc 0 1 kern_start` and `part size mmc 0 1 kern_blocks` store the LBA start and sector count of GPT partition 1 (`kernel`); `mmc read` loads those sectors into RAM. `bootm` then parses the FIT image to extract and boot the kernel with the embedded DTB. `0xBC060000` is the NOR memory-mapped address of the recovery partition (NOR physical `0x1C060000`, KSEG1 uncached alias).
+`gpio read 14` returns 0 (success/true in U-Boot `if`) when GPIO#14 is low — magnet present → recovery. `part start mmc 0 1 kern_start` and `part size mmc 0 1 kern_blocks` store the LBA start and sector count of GPT partition 1 (`kernel`); `mmc read` loads those sectors into RAM. `bootm` then parses the FIT image to extract and boot the kernel with the embedded DTB. For recovery, `sf probe` switches the W25Q512JV into 4-byte addressing mode, `sf read` copies `recovery_size` bytes from NOR offset `0x60000` into RAM at `kernel_addr_r`, then `bootm` boots from RAM — XIP via `0xBC060000` is not used because the MT7628AN CHIP_MODE strapping selects 3-byte auto-read (16 MB window), which is insufficient for recovery images that may span the 16 MB boundary.
 
 `CONFIG_CMD_PART=y` and `CONFIG_EFI_PARTITION=y` must be set in `bodybytes_defconfig` for `part start` to work — see [uboot.md](uboot.md).
 
@@ -326,8 +318,9 @@ Normal boot:
 
 Recovery boot:
 1. U-Boot reads GPIO#14 → low → runs `bootcmd_recovery`
-2. `bootm 0xBC060000` parses the FIT image from NOR, decompresses the initramfs kernel to RAM, and boots with the embedded DTB
-3. OpenWrt runs entirely from RAM; eMMC is untouched and available for repair
+2. `sf probe` switches W25Q512JV to 4-byte mode; `sf read` copies `recovery_size` bytes from NOR offset `0x60000` into RAM at `kernel_addr_r`
+3. `bootm ${kernel_addr_r}` parses the FIT image, decompresses the initramfs kernel, and boots with the embedded DTB
+4. OpenWrt runs entirely from RAM; eMMC is untouched and available for repair
 
 ---
 

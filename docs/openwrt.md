@@ -52,7 +52,7 @@ W25Q512JV, 64 MB, CS0, 25 MHz. The OS lives on eMMC; NOR holds only the bootload
 | `factory` | `0x050000` | 64 KB | read-only; 1 KB WiFi EEPROM at offset 0 |
 | `recovery` | `0x060000` | 63.625 MB | read-only; OpenWrt initramfs kernel |
 
-The `factory` partition exposes a 1 KB nvmem cell (`eeprom@0`) consumed by `&wmac`. If the partition is erased (all 0xFF) the driver falls back to the on-chip eFuse automatically. See [`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py) for how to build a factory blob with a custom MAC.
+The `factory` partition exposes a 1 KB nvmem cell (`eeprom@0`) consumed by `&wmac`. If the partition is erased (all 0xFF) the driver falls back to the on-chip eFuse automatically. [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) generates the factory blob on the fly; pass `--mac XX:XX:XX:XX:XX:XX` to override the default MAC from `config.ini`.
 
 The kernel MTD spi-nor driver handles BAR (Bank Address Register) addressing for the W25Q512JV's four 16 MB regions automatically — no special DTS flag is needed.
 
@@ -210,7 +210,7 @@ No separate DTB file is needed on the eMMC kernel partition. The explicit `fdt a
 
 GPT partition 1 (`kernel`) holds the raw FIT image blob with no filesystem. `emmc_do_upgrade` performs a raw `dd` write directly to `/dev/mmcblkNpN`, which rules out a FAT or ext4 filesystem on that partition: any filesystem would be overwritten and destroyed on every sysupgrade. The raw partition approach is consistent with all other ramips/MT7628 boards in OpenWrt.
 
-`IMAGE/recovery.bin` copies the already-built initramfs kernel (`initramfs-kernel.bin`) into an explicit build output via `append-image-stage`. This is also a FIT image (kernel + recovery DTB). U-Boot boots it from NOR at `bootm 0xBC060000` — `bootm` handles both legacy uImage and FIT format transparently when `CONFIG_FIT=y`, so no env change is required for recovery boot. This file is written to the NOR `recovery` partition at `0x060000` and is used by [`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py).
+`IMAGE/recovery.bin` copies the already-built initramfs kernel (`initramfs-kernel.bin`) into an explicit build output via `append-image-stage`. This is also a FIT image (kernel + recovery DTB). U-Boot boots it via `sf read` from NOR offset `0x60000` into RAM, then `bootm` — `bootm` handles both legacy uImage and FIT format transparently when `CONFIG_FIT=y`. This file is written to the NOR `recovery` partition at `0x060000` by [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py), which also reads its size to set `recovery_size` in the env partition.
 
 `block-mount` provides the `block` binary and preinit scripts. `kmod-fs-ext4` provides the ext4 kernel module for the overlay and data partitions. `uboot-envtools` provides `fw_printenv` and `fw_setenv`; it is also copied into the sysupgrade ramfs by `platform.sh` (`RAMFS_COPY_BIN`). The `uboot-envtools/files/ramips` script populates `/etc/fw_env.config` at first boot by resolving the `u-boot-env` MTD partition by name, so no hardcoded device path is needed.
 
@@ -276,7 +276,7 @@ bodybytes,bodybytes)
 
 It also zeros 8 sectors past each written member to prevent stale content from being misread. `CI_DATAPART="rootfs_data"` tells `emmc_copy_config` where to store the sysupgrade config backup — it is written to the `rootfs_data` partition at the block offset recorded in `$EMMC_ROOTFS_BLOCKS`.
 
-The env partition is pre-programmed with `bootcmd`, `altbootcmd`, and all other boot variables by [`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py) at NOR image build time. `fw_setenv` read-modify-writes the partition and preserves all other variables, so [`openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh`](../openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh) only needs to write the three bootcount variables.
+The env partition is generated on the fly with `bootcmd`, `altbootcmd`, `recovery_size`, and all other boot variables by [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) at flash time. `fw_setenv` read-modify-writes the partition and preserves all other variables, so [`openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh`](../openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh) only needs to write the three bootcount variables.
 
 The `init.d/bootcount` script (START=99) runs near the end of every successful OpenWrt boot and unconditionally resets `upgrade_available=0` and `bootcount=0` via `fw_setenv`. All other env variables are preserved by `fw_setenv`'s read-modify-write behaviour.
 

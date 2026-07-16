@@ -9,7 +9,7 @@ Source tree: `u-boot/` submodule (tag `v2026.04`) — see [building.md](building
 | [`u-boot/configs/bodybytes_defconfig`](../u-boot/configs/bodybytes_defconfig) | Complete standalone defconfig |
 | [`u-boot/arch/mips/dts/bodybytes,bodybytes.dts`](../u-boot/arch/mips/dts/bodybytes,bodybytes.dts) | Full board device tree |
 | [`u-boot/include/configs/bodybytes.h`](../u-boot/include/configs/bodybytes.h) | Board config header: `CFG_SYS_NS16550_COM3` (UART2 MMIO for SPL legacy path) |
-| [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) | Default environment: `bootcmd`, `bootcmd_normal`, `bootcmd_recovery`, `altbootcmd`, `bootmenu_*`; auto-detected by the build system and compiled into `default_environment[]`; also used directly by [`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py) as `mkenvimage` input |
+| [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) | Default environment: `bootcmd`, `bootcmd_normal`, `bootcmd_recovery`, `altbootcmd`, `bootmenu_*`, `recovery_size`; auto-detected by the build system and compiled into `default_environment[]`; also used by [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) as `mkenvimage` input (with `recovery_size` patched at flash time) |
 | [`u-boot/board/bodybytes/bodybytes/Kconfig`](../u-boot/board/bodybytes/bodybytes/Kconfig) | Board vendor/name declarations |
 | [`u-boot/board/bodybytes/bodybytes/MAINTAINERS`](../u-boot/board/bodybytes/bodybytes/MAINTAINERS) | File ownership record |
 
@@ -56,7 +56,7 @@ The SPL serial driver also requires `CFG_SYS_NS16550_COM3` (UART2's MMIO address
 
 ### bootcmd, bootcmd\_normal, bootcmd\_recovery
 
-The boot variables live in [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env). The U-Boot build system auto-detects that file (it matches `board/<vendor>/<board>/<SYS_BOARD>.env`) and compiles it into `default_environment[]`. A blank or corrupt `u-boot-env` still boots correctly because U-Boot uses `default_environment[]`. The env partition is pre-programmed at NOR image build time by [`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py), which passes the same [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) to `mkenvimage` — one file, no duplication.
+The boot variables live in [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env). The U-Boot build system auto-detects that file (it matches `board/<vendor>/<board>/<SYS_BOARD>.env`) and compiles it into `default_environment[]`. A blank or corrupt `u-boot-env` still boots correctly because U-Boot uses `default_environment[]`. The env partition is generated on the fly at flash time by [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py), which patches `recovery_size` with the exact recovery binary size (rounded to sector alignment) then passes the result to `mkenvimage` — one source file, no duplication.
 
 [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) defines `bootmenu_0` and `bootmenu_1` so the boot menu (`CONFIG_CMD_BOOTMENU=y`, `CONFIG_AUTOBOOT_MENU_SHOW=y`, `CONFIG_BOOTDELAY=5`) shows meaningful entries:
 
@@ -86,49 +86,52 @@ fi
 | 3a | `run bootcmd_recovery` | Pin low → recovery boot. |
 | 3b | `run bootcmd_normal` | Pin high → normal eMMC boot. |
 
-**`bootcmd_recovery`** (boot initramfs kernel directly from NOR):
+**`bootcmd_recovery`** (copy recovery kernel from NOR to DRAM, then boot):
 
 ```
-echo 'Boot: recovery (NOR)'
-setenv bootargs console=ttyS2,115200
-bootm 0xBC060000
-```
-
-| Step | Command | Effect |
-|------|---------|--------|
-| 1 | `echo 'Boot: recovery (NOR)'` | Prints the selected boot path to the serial console. |
-| 2 | `setenv bootargs console=ttyS2,115200` | Sets the kernel command line. No `root=` — the recovery kernel is an initramfs image with a built-in rootfs that requires no external root device. Explicitly clearing `root=` prevents a leftover value from a previous `bootcmd_normal` call in the same session from being passed to the initramfs kernel. U-Boot writes this value into the FDT `chosen/bootargs` node before jumping to the kernel, replacing the DTS default. |
-| 3 | `bootm 0xBC060000` | Reads the uImage header at NOR KSEG1 address `0xBC060000` (= NOR physical offset `0x060000`, the recovery partition). Decompresses the kernel into the load address in DRAM, sets up the kernel command line and FDT, and jumps to the entry point. No MMC access occurs; the entire operation runs through the NOR memory-mapped window. |
-
-**`bootcmd_normal`** (load kernel from eMMC GPT partition 1 and boot):
-
-```
-echo 'Boot: normal (eMMC)'
-setenv bootargs console=ttyS2,115200 root=/dev/mmcblk0p2 rootwait
-mmc dev 0
-part start mmc 0 1 ks
-part size mmc 0 1 kz
-mmc read 0x82000000 ${ks} ${kz}
-bootm 0x82000000
+echo "Boot: recovery (NOR)"
+sf probe && sf read ${kernel_addr_r} 0x60000 0x1000000 && bootm ${kernel_addr_r}
 ```
 
 | Step | Command | Effect |
 |------|---------|--------|
-| 1 | `echo 'Boot: normal (eMMC)'` | Prints the selected boot path to the serial console. |
-| 2 | `setenv bootargs ...` | Sets the kernel command line. `root=/dev/mmcblk0p2` tells the kernel which block device holds the squashfs rootfs (GPT partition 2, labelled `rootfs`). Without this the kernel cannot mount its root and panics. `rootwait` makes the kernel wait for the device to appear (harmless for a soldered eMMC, standard practice). U-Boot writes this value into the FDT `chosen/bootargs` node before jumping to the kernel. `root=PARTLABEL=rootfs` must **not** be used — fstools `partname_volume_find` returns NULL for non-`/dev/` root values unless `fstools_partname_fallback_scan=1` is also set, which would break the `rootfs_data` overlay mount. |
-| 3 | `mmc dev 0` | Selects eMMC as the active MMC device. Required before any `mmc` or `part` command. |
-| 4 | `part start mmc 0 1 ks` | Reads the GPT on eMMC device 0, finds partition 1 (`kernel`), and stores its start sector (LBA) in the env variable `${ks}`. Requires `CONFIG_CMD_PART=y` and `CONFIG_EFI_PARTITION=y`. |
-| 5 | `part size mmc 0 1 kz` | Stores the size of partition 1 in sectors in `${kz}`. Using the exact partition size avoids transferring unused sectors beyond the kernel image. |
-| 6 | `mmc read 0x82000000 ${ks} ${kz}` | Reads exactly `${kz}` sectors from LBA `${ks}` into DRAM at `0x82000000`. |
-| 7 | `bootm 0x82000000` | Reads the uImage header from DRAM, decompresses and boots the regular kernel. preinit calls `mount_root`: the kernel has already mounted the squashfs on `/dev/mmcblk0p2` as root; fstools scans `mmcblk0` partitions by GPT label name, mounts `rootfs_data` (partition 3) at `/overlay` via overlayfs, and auto-mounts `data` (partition 4) at `/mnt/data`. |
+| 1 | `echo "Boot: recovery (NOR)"` | Prints the selected boot path to the serial console. |
+| 2 | `sf probe` | Initialises the SPI NOR controller and detects the flash chip. Required before any `sf` command. |
+| 3 | `sf read ${kernel_addr_r} 0x60000 0x1000000` | Reads 16 MB from NOR offset `0x060000` (the recovery partition) into DRAM at `kernel_addr_r` (`0x82000000`). The recovery FIT image is ~9 MB; reading 16 MB is safe — `bootm` uses only `fdt_totalsize()` bytes. Copying to DRAM is required: `fdt_check_full()` (called inside `bootm` during FIT format validation) fails when walking the 9 MB FDT structure directly through the NOR memory-mapped KSEG1 window, but succeeds once the image is in DRAM. |
+| 4 | `bootm ${kernel_addr_r}` | Boots the FIT image from DRAM. Decompresses the LZMA kernel (load/entry `0x80000000`), passes the embedded DTB (with `bootargs = "console=ttyS2,115200"`) to the kernel, and jumps to the entry point. No `setenv bootargs` is needed — the DTB carries the command line. |
+
+**`bootcmd_normal`** (load kernel from eMMC GPT partition 1 and boot, fall back to recovery on failure):
+
+```
+echo "Boot: normal (eMMC)"
+if mmc dev 0 && mmc rescan && \
+   part start mmc 0 1 kern_start && part size mmc 0 1 kern_blocks && \
+   mmc read ${kernel_addr_r} ${kern_start} ${kern_blocks}; then
+    bootm ${kernel_addr_r}
+else
+    echo "Normal boot failed"
+    run bootcmd_recovery
+fi
+```
+
+| Step | Command | Effect |
+|------|---------|--------|
+| 1 | `echo "Boot: normal (eMMC)"` | Prints the selected boot path to the serial console. |
+| 2 | `mmc dev 0` | Selects eMMC as the active MMC device. Required before any `mmc` or `part` command. |
+| 3 | `mmc rescan` | Re-scans the MMC bus to detect the eMMC after power-up. Without this, the card may not be enumerated yet. |
+| 4 | `part start mmc 0 1 kern_start` | Reads the GPT on eMMC device 0, finds partition 1 (`kernel`), and stores its start sector (LBA) in `${kern_start}`. Requires `CONFIG_CMD_PART=y` and `CONFIG_EFI_PARTITION=y`. |
+| 5 | `part size mmc 0 1 kern_blocks` | Stores the size of partition 1 in sectors in `${kern_blocks}`. Using the exact partition size avoids reading unused sectors beyond the kernel image. |
+| 6 | `mmc read ${kernel_addr_r} ${kern_start} ${kern_blocks}` | Reads exactly `${kern_blocks}` sectors from LBA `${kern_start}` into DRAM at `kernel_addr_r` (`0x82000000`). |
+| 7 | `bootm ${kernel_addr_r}` | Boots the FIT image from DRAM. The embedded DTB carries `bootargs = "console=ttyS2,115200 root=/dev/mmcblk0p2 rootwait"`. preinit calls `mount_root`: the kernel mounts the squashfs on `/dev/mmcblk0p2` as root; fstools scans `mmcblk0` partitions by GPT label name, mounts `rootfs_data` (partition 3) at `/overlay` via overlayfs, and auto-mounts `data` (partition 4) at `/mnt/data`. `root=PARTLABEL=rootfs` must **not** be used — fstools `partname_volume_find` returns NULL for non-`/dev/` root values unless `fstools_partname_fallback_scan=1` is also set, which would break the `rootfs_data` overlay mount. |
+| 8 (fallback) | `run bootcmd_recovery` | If any step in the `if` chain fails (MMC absent, GPT corrupt, read error), falls back to NOR recovery automatically. |
 
 ### Env partition pre-programming
 
 U-Boot has two env sources: the compiled-in `default_environment[]` array (built from [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) at compile time) and the env partition in NOR flash. When the env partition CRC is valid U-Boot loads from flash exclusively — the compiled-in defaults are never consulted. This means that once any tool has written to the env partition (e.g. the first `fw_setenv` call from OpenWrt), `bootcmd`, `altbootcmd`, and friends must already be present in the partition or they go missing.
 
-[`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py) pre-programs the env partition at offset `0x040000` by calling [`u-boot/tools/mkenvimage`](../u-boot/tools/mkenvimage) (built as part of the normal U-Boot build) with [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) as input. `mkenvimage` produces a correctly formatted 4 KB binary — a 4-byte CRC32 header followed by null-terminated `key=value` pairs and 0xFF padding — which is embedded directly into the NOR image. The env is valid from the very first power-up; every `fw_setenv` call from OpenWrt safely read-modify-writes the partition without losing boot variables.
+[`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) generates the env partition at offset `0x040000` on the fly: it reads [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env), patches the `recovery_size` variable to the actual recovery binary size (rounded up to NOR sector alignment), then invokes [`u-boot/tools/mkenvimage`](../u-boot/tools/mkenvimage) (built as part of the normal U-Boot build) to produce a correctly formatted 4 KB binary — a 4-byte CRC32 header followed by null-terminated `key=value` pairs and 0xFF padding. The env is valid from the very first power-up; every `fw_setenv` call from OpenWrt safely read-modify-writes the partition without losing boot variables.
 
-[`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) is the single source of truth for all boot variables. The U-Boot build compiles it into `default_environment[]` and [`scripts/generate_nor_env_wifi_images.py`](../scripts/generate_nor_env_wifi_images.py) passes it to `mkenvimage` — the same file serves both purposes with no duplication. When adding or changing a boot variable, edit only [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env).
+[`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) is the single source of truth for all boot variables. The U-Boot build compiles it into `default_environment[]` and [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) passes it to `mkenvimage` — the same file serves both purposes with no duplication. When adding or changing a boot variable, edit only [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env).
 
 A blank or corrupt env partition still falls back to the compiled-in defaults so the device always boots. If the env is erased (e.g. by a U-Boot-only flash update), run `saveenv` at the U-Boot prompt to write the compiled-in defaults back to flash.
 

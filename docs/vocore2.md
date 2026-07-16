@@ -209,7 +209,23 @@ Partition 1 holds the raw kernel binary; partition 2 holds the squashfs rootfs (
 
 VoCore2 uses a Winbond W25Q256FV: 32 MB total, 256-byte page size, 64 KB erase block size. The 64 KB block size matches `CONFIG_ENV_SECT_SIZE=0x10000` exactly — U-Boot's `saveenv` erases one block, and `fw_setenv` issues an erase ioctl for `secsize=0x10000`; both are correct for this chip. The partition offsets (u-boot at `0x0`, u-boot-env at `0x40000`, factory at `0x50000`, recovery at `0x60000`) are identical to bodybytes; only the total NOR size and the recovery partition end differ. Set `total_size_mb = 32` and `chip_name = W25Q256FV` in `scripts/config.ini` before using any NOR scripts on VoCore2 — `flash_nor_images.py --file` then produces a 32 MB image with the recovery partition capped at `0x1FA0000` (31.625 MB) instead of 63.625 MB. The actual recovery kernel is far smaller than either limit.
 
-The recovery boot path (`altbootcmd=run bootcmd_recovery`, `bootcmd_recovery=bootm 0xBC060000`) reads the kernel directly from the NOR memory-mapped window — it does not use `sf read` and does not care about the DTS partition size.
+The recovery boot path (`altbootcmd=run bootcmd_recovery`) copies the kernel to RAM via `sf read` before booting — see §SPI Addressing Mode below for why direct XIP boot (`bootm 0xBC060000`) is unreliable and is not used.
+
+### SPI Addressing Mode — CHIP_MODE Strapping
+
+The MT7628AN latches `CHIP_MODE[2:0]` from `{SPI_CS1, SPI_CLK, SPI_MOSI}` at reset. These bits select the SPI XIP (auto-read) addressing mode: **3-byte** (16 MB window) or **4-byte** (full flash access). This only affects the memory-mapped NOR window at KSEG1 `0xBC000000` / physical `0x1C000000`. `sf read`, `sf write`, and `sf update` use the SPI driver and are unaffected — the driver switches the chip to 4-byte mode on `sf probe` regardless of strapping.
+
+**VoCore2 strapping** selects 3-byte mode. VoCore2 shipped historically with a 16 MB W25Q128FV; later production runs changed to the W25Q256FV (32 MB) without updating the strapping resistors. The recovery partition starts at offset `0x60000`, leaving ~15.6 MB of usable XIP-readable space before the 16 MB address wrap at `0xFFFFFF`. Recovery images that fit within that range boot correctly via `bootm 0xBC060000`; images larger than ~15.6 MB return corrupt data from XIP.
+
+**Bodybytes strapping**: `SPI_CS1` = high, `SPI_CLK` = high, `SPI_MOSI` = floating. MOSI is wired directly to the W25Q512JV SI pin, which is high-impedance when CS is deasserted, so `CHIP_MODE[0]` at reset is determined only by PCB pull resistors. In practice the effective mode is also 3-byte, giving the same 16 MB XIP window — but the bodybytes chip is a W25Q512JV (64 MB), so any recovery image larger than ~15.6 MB would read garbage via XIP. The floating strapping is a hardware design issue; a future board revision should add an explicit pull resistor to lock `CHIP_MODE[0]` to a known state.
+
+**The fix**: never boot from the XIP window directly. `bootcmd_recovery` copies to RAM first:
+
+```
+sf probe && sf read ${kernel_addr_r} 0x60000 0x1000000 && bootm ${kernel_addr_r}
+```
+
+`sf probe` triggers EN4B (command `0xB7`) on the W25Q512JV, switching it to 4-byte mode. `sf read` then uses the SPI driver — not the XIP window — and can access the full 64 MB correctly.
 
 **OpenWRT MTD note:** The OpenWRT DTS defines the `recovery` partition with size `0x3FA0000` (63.625 MB), which extends to the 64 MB boundary. On VoCore2 the kernel spi-nor driver detects the W25Q256 as 32 MB, so the MTD layer rejects or truncates the `recovery` partition with a warning. The `u-boot`, `u-boot-env`, and `factory` partitions (all within the first 384 KB) register correctly. The truncated `recovery` MTD is harmless in practice: OpenWRT never writes to it (it is `read-only` in the DTS and is only ever written by U-Boot via `sf`), and `fw_setenv`/`fw_printenv` use `u-boot-env` which is unaffected.
 
@@ -224,11 +240,10 @@ In `scripts/config.ini` set `total_size_mb = 32` and `chip_name = W25Q256FV` in 
 **2 — Build the NOR image:**
 
 ```sh
-scripts/generate_nor_env_wifi_images.py XX:XX:XX:XX:XX:XX
-scripts/flash_nor_images.py --file
+scripts/flash_nor_images.py --file --mac XX:XX:XX:XX:XX:XX
 ```
 
-Output: `build/bodybytes_nor_image.bin` (32 MB).
+Output: `build/bodybytes_nor_image.bin` (32 MB). The u-boot-env and factory blobs are generated on the fly.
 
 **3 — Flash to NOR:**
 
@@ -256,7 +271,7 @@ fw_setenv bootlimit 3
 reset
 ```
 
-U-Boot will run `altbootcmd` → `bootm 0xBC060000` and boot the recovery initramfs from NOR.
+U-Boot will run `altbootcmd` → `sf probe && sf read ${kernel_addr_r} 0x60000 0x1000000 && bootm ${kernel_addr_r}` and boot the recovery initramfs from NOR.
 
 **5 — Restore stock NOR** when done (see §Restoring the stock NOR image below).
 
