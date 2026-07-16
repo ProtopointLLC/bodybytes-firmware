@@ -3,3 +3,7 @@ docs/Bodybytes_GDrive/
 __pycache__
 *.pyc
 build/
+openwrt/private-key.pem
+openwrt/public-key.pem
+openwrt/key-build
+openwrt/key-build.pub
