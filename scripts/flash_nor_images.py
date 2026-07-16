@@ -20,6 +20,7 @@ Connection settings are read from scripts/config.ini.
 """
 
 import argparse
+import zlib
 from pathlib import Path
 
 import serial
@@ -37,16 +38,11 @@ from lib.config import (
 from lib.dts import parse_nor_partitions
 
 
-def _sector_ceil(n: int) -> int:
-    return (n + NOR_SECTOR_SIZE - 1) & ~(NOR_SECTOR_SIZE - 1)
-
-
 # --- JTAG strategy ---
 
 def _flash_jtag(openocd: OpenOCD, uboot: UBoot,
                 label: str, binary: Path, flash_offset: int) -> None:
     total = binary.stat().st_size
-    erase_size = min(_sector_ceil(total), NOR_SIZE - flash_offset)
 
     log(f"Flashing '{label}': {binary.name} ({total:#x} bytes, NOR offset {flash_offset:#x})")
 
@@ -54,12 +50,7 @@ def _flash_jtag(openocd: OpenOCD, uboot: UBoot,
     out = _ub(uboot, "sf probe", timeout=10)
     if "Detected" not in out:
         err(f"sf probe failed:\n{out}")
-    out = _ub(uboot, f"sf erase {flash_offset:#x} {erase_size:#x}", timeout=300)
-    if "OK" not in out:
-        err(f"sf erase failed:\n{out}")
 
-    # CONFIG_MIPS_CACHE_DISABLE: load_image writes directly to DRAM with no cache;
-    # sf write reads the same physical memory without interference.
     load_timeout = max(60, total // (70 * 1024) * 3)
     _oc(openocd, "halt", timeout=10)
     out = _oc(openocd, f"load_image {binary} {STAGING_ADDR:#x} bin", timeout=load_timeout)
@@ -67,10 +58,39 @@ def _flash_jtag(openocd: OpenOCD, uboot: UBoot,
         err(f"load_image failed:\n{out}")
     _oc(openocd, "resume", timeout=10)
 
-    uboot.sync(timeout=5)
-    out = _ub(uboot, f"sf write {STAGING_ADDR:#x} {flash_offset:#x} {total:#x}", timeout=120)
-    if "OK" not in out:
-        err(f"sf write failed:\n{out}")
+    sectors = (total + NOR_SECTOR_SIZE - 1) // NOR_SECTOR_SIZE
+    pages   = (total + 255) // 256
+    update_timeout = max(300, sectors * 200 // 1000 + pages * 5 // 1000 + 60)
+    expected_crc = zlib.crc32(binary.read_bytes()) & 0xFFFFFFFF
+    uboot.sync(timeout=30)
+
+    out = _ub(uboot, f"crc32 {STAGING_ADDR:#x} {total:#x}", timeout=60)
+    try:
+        staging_crc = int(out.split("==>")[-1].strip().split()[0], 16)
+    except (IndexError, ValueError):
+        err(f"crc32 (staging) output unparseable:\n{out}")
+    if staging_crc != expected_crc:
+        err(f"DRAM staging CRC mismatch: got {staging_crc:#010x}, expected {expected_crc:#010x}"
+            f" — load_image corrupted data")
+    log(f"DRAM staging CRC verified: {staging_crc:#010x}")
+
+    out = _ub(uboot, f"sf update {STAGING_ADDR:#x} {flash_offset:#x} {total:#x}",
+              timeout=update_timeout)
+    if "bytes written" not in out:
+        err(f"sf update failed:\n{out}")
+
+    verify_addr = STAGING_ADDR + ((total + 0xFFFFF) & ~0xFFFFF)
+    out = _ub(uboot, f"sf read {verify_addr:#x} {flash_offset:#x} {total:#x}", timeout=60)
+    if "Read: OK" not in out:
+        err(f"sf read (verify) failed:\n{out}")
+    out = _ub(uboot, f"crc32 {verify_addr:#x} {total:#x}", timeout=60)
+    try:
+        actual_crc = int(out.split("==>")[-1].strip().split()[0], 16)
+    except (IndexError, ValueError):
+        err(f"crc32 output unparseable:\n{out}")
+    if actual_crc != expected_crc:
+        err(f"CRC32 mismatch for '{label}': NOR={actual_crc:#010x}  disk={expected_crc:#010x}")
+    log(f"CRC32 verified: {actual_crc:#010x}")
 
 
 # --- file strategy ---
