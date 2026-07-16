@@ -36,10 +36,10 @@ The first compatible string is the board-specific identifier OpenWRT uses for bo
 #### Console
 
 ```dts
-chosen { bootargs = "console=ttyS2,115200"; }
+chosen { bootargs = "console=ttyS0,115200"; }
 ```
 
-UART2 = ttyS2. UART2 is routed to EPHY MDI_P2 pads (MDI_TP_P2 / MDI_TN_P2, SoC pins 47/48): `uart2_pins` sets `UART2_MODE=0`; `ephy-digital` (see below) sets `AGPIO_CFG EPHY_GPIO_AIO_EN[4:1]=0xf` at pinctrl probe time, switching those pads from analog to digital mode.
+UART2 = ttyS0. `&uartlite` (UART0) is disabled in the DTS, so UART2 is the only registered serial device and gets ttyS0. UART2 is routed to EPHY MDI_P2 pads (MDI_TP_P2 / MDI_TN_P2, SoC pins 47/48): `uart2_pins` sets `UART2_MODE=0`; `ephy-digital` (see below) sets `AGPIO_CFG EPHY_GPIO_AIO_EN[4:1]=0xf` at pinctrl probe time, switching those pads from analog to digital mode.
 
 #### SPI NOR flash — `&spi0`
 
@@ -88,12 +88,14 @@ Kingston EMMC128-IY29-5B111, 128 GB eMMC 5.1, on EPHY P3/P4 MDI pads (SoC pins 5
 
 | Property | Value | Reason |
 |----------|-------|--------|
-| `pinctrl-0/1` | `sdxc_iot_mode mdi_p1_gpio` | Overrides base `sdxc_pins`; applies EPHY routing and SPIS GPIO mode |
-| `non-removable` | — | Soldered eMMC; skips card-detect polling |
-| `/delete-property/ cap-sd-highspeed` | — | Removes removable-SD capability from base dtsi |
-| `mmc-pwrseq` | `emmc_pwrseq` | Links hardware reset GPIO |
+| `pinctrl-0` | `sdxc_iot_mode mdi_p1_gpio` | Overrides base `sdxc_pins`; applies EPHY routing and SPIS GPIO mode |
+| `vmmc-supply` | `reg_3v3` | Explicit 3.3 V supply for eMMC VCC; without this the mtk-msdc driver cannot negotiate voltage and fails with `no support for card's volts` |
+| `vqmmc-supply` | `reg_3v3` | Explicit 3.3 V supply for eMMC VCCQ (I/O signalling) |
+| `no-1-8-v` | — | Prevents voltage-switch negotiation to 1.8 V; MT7628 SDXC runs at 3.3 V only |
+| `mediatek,cd-poll` | — | Software card-detect polling; used instead of `non-removable` for compatibility with the removable Hardkernel eMMC module on VoCore2 |
+| `mmc-pwrseq` | `emmc_pwrseq` | Links hardware reset GPIO (GPIO#15, MDI_TN_P1) |
 
-`cap-mmc-highspeed`, `bus-width = <4>`, and `no-1-8-v` are inherited from `mt7628an.dtsi`. High Speed SDR mode (≤52 MHz, ≤52 MB/s) is the fastest mode the MT7628 SDXC controller supports at 3.3 V VCCQ; HS200/HS400 require 1.8 V and are unreachable regardless.
+`cap-mmc-highspeed` and `bus-width = <4>` are inherited from `mt7628an.dtsi`. High Speed SDR mode (≤52 MHz, ≤52 MB/s) is the fastest mode the MT7628 SDXC controller supports at 3.3 V VCCQ; HS200/HS400 require 1.8 V and are unreachable regardless.
 
 8-bit bus width (`bus-width = <8>`) is not possible: the four additional data lines (SD_D4–SD_D7) would require `groups = "uart2"; function = "sdxc d5 d4"` (as defined in `emmc_iot_8bit_mode` in the dtsi), which conflicts with UART2 as the system console.
 
@@ -121,13 +123,35 @@ GPIO#14 is on the same MDI P1 pad group as GPIO#15 (eMMC reset), so `mdi_p1_gpio
 
 Both disabled. Bodybytes has no physical Ethernet ports; the MT7628 internal switch is unused.
 
+#### UART0 — `&uartlite`
+
+```dts
+&uartlite { status = "disabled"; };
+```
+
+UART0 is disabled. `mt7628an.dtsi` leaves `uartlite` enabled by default; bodybytes has no UART0 connection on the board. Disabling it ensures UART2 registers as ttyS0 (Linux assigns ttyS numbers in probe order — with only UART2 active, it becomes the first and only serial device).
+
+#### 3.3 V regulator — `reg_3v3`
+
+```dts
+reg_3v3: regulator-3v3 {
+    compatible = "regulator-fixed";
+    regulator-name = "3v3";
+    regulator-min-microvolt = <3300000>;
+    regulator-max-microvolt = <3300000>;
+    regulator-always-on;
+};
+```
+
+Fixed 3.3 V regulator referenced by `vmmc-supply` and `vqmmc-supply` on `&sdhci`. The MT7628 SDXC controller is hard-wired to 3.3 V; declaring the regulator explicitly prevents the mtk-msdc driver from attempting voltage negotiation and failing with `no support for card's volts`.
+
 #### UART2 — `&uart2`
 
 ```dts
 &uart2 { status = "okay"; };
 ```
 
-Enables the UART2 peripheral (ttyS2). `uart2_pins` (from `mt7628an.dtsi`) sets `UART2_MODE=0`; `ephy-digital` sets `AGPIO_CFG` to make the MDI P2 pads digital. Both are applied at pinctrl probe.
+Enables the UART2 peripheral (ttyS0, since UART0 is disabled). `uart2_pins` (from `mt7628an.dtsi`) sets `UART2_MODE=0`; `ephy-digital` sets `AGPIO_CFG` to make the MDI P2 pads digital. Both are applied at pinctrl probe.
 
 #### WiFi — `&wmac`
 

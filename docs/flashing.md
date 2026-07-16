@@ -312,7 +312,7 @@ saveenv
 
 Normal boot:
 1. U-Boot reads GPIO#14 → high → runs `bootcmd_normal`
-2. Sets `bootargs` to `console=ttyS2,115200 root=/dev/mmcblk0p2 rootwait`, then reads GPT partition 1 (`kernel`) from eMMC into RAM at `kernel_addr_r` (0x82000000) using `part start`/`part size` + `mmc read`
+2. Sets `bootargs` to `console=ttyS0,115200 root=/dev/mmcblk0p2 rootwait`, then reads GPT partition 1 (`kernel`) from eMMC into RAM at `kernel_addr_r` (0x82000000) using `part start`/`part size` + `mmc read`
 3. `bootm 0x82000000` parses the FIT image: extracts and decompresses the kernel, extracts the DTB, applies memory and bootargs fixup to the DTB, then jumps to the kernel entry
 4. Linux mounts squashfs rootfs (p2) as root; libfstools (fstools) detects the `rootfs_data` GPT label on p3 and layers it at `/overlay` via overlayfs
 

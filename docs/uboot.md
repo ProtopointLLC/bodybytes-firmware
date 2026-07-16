@@ -90,15 +90,15 @@ fi
 
 ```
 echo "Boot: recovery (NOR)"
-sf probe && sf read ${kernel_addr_r} 0x60000 0x1000000 && bootm ${kernel_addr_r}
+sf probe && sf read ${kernel_addr_r} 0x60000 ${recovery_size} && bootm ${kernel_addr_r}
 ```
 
 | Step | Command | Effect |
 |------|---------|--------|
 | 1 | `echo "Boot: recovery (NOR)"` | Prints the selected boot path to the serial console. |
 | 2 | `sf probe` | Initialises the SPI NOR controller and detects the flash chip. Required before any `sf` command. |
-| 3 | `sf read ${kernel_addr_r} 0x60000 0x1000000` | Reads 16 MB from NOR offset `0x060000` (the recovery partition) into DRAM at `kernel_addr_r` (`0x82000000`). The recovery FIT image is ~9 MB; reading 16 MB is safe — `bootm` uses only `fdt_totalsize()` bytes. Copying to DRAM is required: `fdt_check_full()` (called inside `bootm` during FIT format validation) fails when walking the 9 MB FDT structure directly through the NOR memory-mapped KSEG1 window, but succeeds once the image is in DRAM. |
-| 4 | `bootm ${kernel_addr_r}` | Boots the FIT image from DRAM. Decompresses the LZMA kernel (load/entry `0x80000000`), passes the embedded DTB (with `bootargs = "console=ttyS2,115200"`) to the kernel, and jumps to the entry point. No `setenv bootargs` is needed — the DTB carries the command line. |
+| 3 | `sf read ${kernel_addr_r} 0x60000 ${recovery_size}` | Reads `${recovery_size}` bytes from NOR offset `0x060000` (the recovery partition) into DRAM at `kernel_addr_r` (`0x82000000`). `recovery_size` is patched into the env partition at flash time to the exact recovery binary size rounded up to NOR sector alignment. Copying to DRAM is required: `fdt_check_full()` (called inside `bootm` during FIT format validation) fails when walking the FDT structure directly through the NOR memory-mapped KSEG1 window, but succeeds once the image is in DRAM. |
+| 4 | `bootm ${kernel_addr_r}` | Boots the FIT image from DRAM. Decompresses the LZMA kernel (load/entry `0x80000000`), passes the embedded DTB (with `bootargs = "console=ttyS0,115200"`) to the kernel, and jumps to the entry point. No `setenv bootargs` is needed — the DTB carries the command line. |
 
 **`bootcmd_normal`** (load kernel from eMMC GPT partition 1 and boot, fall back to recovery on failure):
 
@@ -122,7 +122,7 @@ fi
 | 4 | `part start mmc 0 1 kern_start` | Reads the GPT on eMMC device 0, finds partition 1 (`kernel`), and stores its start sector (LBA) in `${kern_start}`. Requires `CONFIG_CMD_PART=y` and `CONFIG_EFI_PARTITION=y`. |
 | 5 | `part size mmc 0 1 kern_blocks` | Stores the size of partition 1 in sectors in `${kern_blocks}`. Using the exact partition size avoids reading unused sectors beyond the kernel image. |
 | 6 | `mmc read ${kernel_addr_r} ${kern_start} ${kern_blocks}` | Reads exactly `${kern_blocks}` sectors from LBA `${kern_start}` into DRAM at `kernel_addr_r` (`0x82000000`). |
-| 7 | `bootm ${kernel_addr_r}` | Boots the FIT image from DRAM. The embedded DTB carries `bootargs = "console=ttyS2,115200 root=/dev/mmcblk0p2 rootwait"`. preinit calls `mount_root`: the kernel mounts the squashfs on `/dev/mmcblk0p2` as root; fstools scans `mmcblk0` partitions by GPT label name, mounts `rootfs_data` (partition 3) at `/overlay` via overlayfs, and auto-mounts `data` (partition 4) at `/mnt/data`. `root=PARTLABEL=rootfs` must **not** be used — fstools `partname_volume_find` returns NULL for non-`/dev/` root values unless `fstools_partname_fallback_scan=1` is also set, which would break the `rootfs_data` overlay mount. |
+| 7 | `bootm ${kernel_addr_r}` | Boots the FIT image from DRAM. The embedded DTB carries `bootargs = "console=ttyS0,115200 root=/dev/mmcblk0p2 rootwait"`. preinit calls `mount_root`: the kernel mounts the squashfs on `/dev/mmcblk0p2` as root; fstools scans `mmcblk0` partitions by GPT label name, mounts `rootfs_data` (partition 3) at `/overlay` via overlayfs, and auto-mounts `data` (partition 4) at `/mnt/data`. `root=PARTLABEL=rootfs` must **not** be used — fstools `partname_volume_find` returns NULL for non-`/dev/` root values unless `fstools_partname_fallback_scan=1` is also set, which would break the `rootfs_data` overlay mount. |
 | 8 (fallback) | `run bootcmd_recovery` | If any step in the `if` chain fails (MMC absent, GPT corrupt, read error), falls back to NOR recovery automatically. |
 
 ### Env partition pre-programming

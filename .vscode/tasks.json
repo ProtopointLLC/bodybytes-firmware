@@ -1,0 +1,129 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "U-Boot: Build",
+            "type": "shell",
+            "command": "nix develop .#uboot --command bash -c 'cd u-boot && make mrproper && make bodybytes_defconfig && make -j$(nproc)'",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": ["$gcc"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "OpenWrt: Setup",
+            "type": "shell",
+            "command": "nix develop .#openwrt --command bash -c 'cd openwrt && ./scripts/feeds update -a && ./scripts/feeds install -a && cp ../bodybytes.config .config && make defconfig && make download'",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "OpenWrt: Download Packages",
+            "type": "shell",
+            "command": "nix develop .#openwrt --command bash -c 'cd openwrt && cp ../bodybytes.config .config && make defconfig && make download'",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "OpenWrt: Build",
+            "type": "shell",
+            "command": "nix develop .#openwrt --command bash -c 'cd openwrt && cp ../bodybytes.config .config && make defconfig && make V=s world -j$(nproc)'",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": ["$gcc"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "Serial Monitor",
+            "type": "shell",
+            "command": "nix develop .#uboot --command picocom -b 115200 --flow n /dev/ttyUSB0",
+            "isBackground": true,
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "JTAG: Start OpenOCD J-Link",
+            "type": "shell",
+            "command": "nix develop .#uboot --command python3 scripts/start_openocd_jlink.py --vocore2",
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": { "regexp": "^$" },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "Board\\s*:",
+                    "endsPattern": "Listening on port 4444"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "JTAG: Flash NOR",
+            "type": "shell",
+            "command": "nix develop .#uboot --command python3 scripts/flash_nor_images.py --jtag --all",
+            "dependsOn": "JTAG: Start OpenOCD J-Link",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": [],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "JTAG: Boot U-Boot from RAM",
+            "type": "shell",
+            "command": "nix develop .#uboot --command python3 scripts/boot_uboot_jtag.py",
+            "dependsOn": "JTAG: Start OpenOCD J-Link",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            }
+        }
+    ]
+}

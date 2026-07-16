@@ -71,17 +71,12 @@ nix develop .#uboot
 Start OpenOCD:
 
 ```sh
-openocd -f interface/jlink.cfg \
-    -c "transport select jtag" \
-    -c "adapter speed 100" \
-    -c "reset_config trst_only" \
-    -f mt7628.cfg \
-    -c "init" \
-    -c "halt" \
-    -c "wait_halt 5000"
+scripts/start_openocd_jlink.py
 ```
 
 `trst_only` — bodybytes has no PORST\_N on the JTAG connector. OpenOCD can reset the TAP (JTRST\_N) but not the SoC. Power the board first, then connect OpenOCD. `halt` sends a debug request to the running CPU rather than forcing it to a clean reset entry point.
+
+The script uses `reset_config trst_only`, issues `halt` after `init`, and waits up to 5 s for the CPU to halt. Ctrl-C terminates OpenOCD directly. Pass `--vocore2` when using a VoCore2 instead (see [vocore2.md §OpenOCD](vocore2.md#openocd)).
 
 Expected output:
 

@@ -82,17 +82,12 @@ J6 on the breakout is a 2×5 1.27 mm header wired to the ARM 9-pin Cortex debug 
 VoCore2 has PORST\_N wired to J6 pin 10. Use `trst_and_srst` with `connect_assert_srst` so OpenOCD holds the SoC in reset during TAP init and halts cleanly at the SPI NOR entry point:
 
 ```sh
-openocd -f interface/jlink.cfg \
-    -c "transport select jtag" \
-    -c "adapter speed 100" \
-    -c "reset_config trst_and_srst separate srst_nogate connect_assert_srst" \
-    -f mt7628.cfg \
-    -c "init" \
-    -c "reset halt" \
-    -c "wait_halt 10000"
+scripts/start_openocd_jlink.py --vocore2
 ```
 
-Bodybytes has no PORST\_N on its JTAG connector and uses a different reset\_config — see [jtag.md](jtag.md).
+This uses `reset_config trst_and_srst separate srst_nogate connect_assert_srst`, issues `reset halt` after `init`, and waits up to 5 s. Ctrl-C terminates OpenOCD directly.
+
+Bodybytes has no PORST\_N on its JTAG connector and uses a different reset\_config — see [jtag.md](jtag.md) (run without `--vocore2`).
 
 ### Bootstrap DRAM
 
@@ -136,12 +131,12 @@ When running bodybytes U-Boot (`CONFIG_CONS_INDEX=3`, `UART2_MODE=0`, `ephy_iot_
 
 ### Stock VoCore2 UART2 is on different pins
 
-Stock VoCore2 firmware routes its UART2 console to **TXD2/RXD2** on the breakout connector (also called P1RP/P1RN in MDI pad naming). These are a completely different pair of SoC pads from P2TP/P2TN. Both firmwares call it "UART2" / `ttyS2` but use different pin mux paths:
+Stock VoCore2 firmware routes its UART2 console to **TXD2/RXD2** on the breakout connector (also called P1RP/P1RN in MDI pad naming). These are a completely different pair of SoC pads from P2TP/P2TN. Both use UART2 hardware but appear at different ttyS numbers and on different pins:
 
-| Firmware | UART2 TX | UART2 RX |
-|----------|----------|----------|
-| bodybytes U-Boot (`UART2_MODE=0`) | P2TP | P2TN |
-| Stock VoCore2 firmware | TXD2 (P1RP) | RXD2 (P1RN) |
+| Firmware | ttyS | UART2 TX | UART2 RX |
+|----------|------|----------|----------|
+| bodybytes firmware (`UART2_MODE=0`, UART0 disabled) | ttyS0 | P2TP | P2TN |
+| Stock VoCore2 firmware (UART0 + UART2 both active) | ttyS2 | TXD2 (P1RP) | RXD2 (P1RN) |
 
 Move your USB-serial adapter wires when switching between stock VoCore2 firmware and bodybytes U-Boot on the same hardware.
 
@@ -222,7 +217,7 @@ The MT7628AN latches `CHIP_MODE[2:0]` from `{SPI_CS1, SPI_CLK, SPI_MOSI}` at res
 **The fix**: never boot from the XIP window directly. `bootcmd_recovery` copies to RAM first:
 
 ```
-sf probe && sf read ${kernel_addr_r} 0x60000 0x1000000 && bootm ${kernel_addr_r}
+sf probe && sf read ${kernel_addr_r} 0x60000 ${recovery_size} && bootm ${kernel_addr_r}
 ```
 
 `sf probe` triggers EN4B (command `0xB7`) on the W25Q512JV, switching it to 4-byte mode. `sf read` then uses the SPI driver — not the XIP window — and can access the full 64 MB correctly.
@@ -271,7 +266,7 @@ fw_setenv bootlimit 3
 reset
 ```
 
-U-Boot will run `altbootcmd` → `sf probe && sf read ${kernel_addr_r} 0x60000 0x1000000 && bootm ${kernel_addr_r}` and boot the recovery initramfs from NOR.
+U-Boot will run `altbootcmd` → `sf probe && sf read ${kernel_addr_r} 0x60000 ${recovery_size} && bootm ${kernel_addr_r}` and boot the recovery initramfs from NOR.
 
 **5 — Restore stock NOR** when done (see §Restoring the stock NOR image below).
 
@@ -286,15 +281,7 @@ The procedure below dumps the stock VoCore2 NOR to `build/vocore2_nor_backup.bin
 **1 — Start OpenOCD and RAM-boot bodybytes U-Boot** (for `sf` command access and fast SPI reads):
 
 ```sh
-openocd -f interface/jlink.cfg \
-    -c "transport select jtag" \
-    -c "adapter speed 100" \
-    -c "reset_config trst_and_srst separate srst_nogate connect_assert_srst" \
-    -f mt7628.cfg \
-    -c "init" \
-    -c "reset halt" \
-    -c "wait_halt 10000"
-
+scripts/start_openocd_jlink.py --vocore2
 scripts/boot_uboot_jtag.py
 ```
 
