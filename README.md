@@ -1,7 +1,6 @@
 # bodybytes-firmware
 
-Development environment for the bodybytes implantable WiFi router - MT7628AN
-SoC, 256 MB DDR2, 64 MB SPI NOR, 128 GB eMMC.
+Development environment for the bodybytes implantable WiFi router - MT7628AN SoC, 256 MB DDR2, 64 MB SPI NOR, 128 GB eMMC.
 
 ## Submodules
 
@@ -45,7 +44,7 @@ Reachable at `https://bodybytes.local`, `https://192.168.1.1`, or `https://fd13:
 
 **File sharing (Samba)**
 
-`/mnt/data` (128 GB eMMC `data` partition) is shared read-write as a guest share named `data`. Discoverable on Windows via WSD (wsdd2), on macOS/Linux via mDNS (`_smb._tcp`, registered dynamically by smbd via avahi).
+`/mnt/data` (128 GB eMMC `data` partition) is shared read-write as a share named `data`.
 
 ## Documentation
 

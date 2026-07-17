@@ -279,8 +279,13 @@ The bodybytes board uses the **Antenova Serica SR4W035** — a 2.4 GHz SMD chip 
 ### Calibration procedure (once RF bench is available)
 
 1. Flash the factory blob and verify association on CH6 (mid-band) — confirms the EEPROM structure is accepted by the driver.
-2. Connect a power sensor to the matching-circuit test point and measure conducted TX power at 54 Mbps. Adjust `wifi_tx0_power` until the level meets the budget (regulatory EIRP − SR4W035 average gain − trace/matching loss). Then set `wifi_nic_confg_1 = 00 20` to enable TSSI_COMP closed-loop regulation to this calibrated target.
-3. Sweep CH1, CH6, CH11, CH14 and record deviation from the CH6 reference. Update `wifi_tx0_pwr_ofst_l/m/h` for any group outside ±1 dB.
-4. Measure EVM at each rate group (CCK, OFDM 6–54M, HT MCS). Reduce the corresponding `wifi_tx_pwr_*` register by one step (0.5 dBm) where EVM is marginal, working highest-rate first.
-5. Verify HT40 TX power on the primary channel at MCS=7. `TX_POWER_DELTA = 0x82` applies an automatic −1 dBm de-rating; confirm it is sufficient.
-6. Measure crystal frequency deviation (skip if XO tolerance is within spec). If error >±20 ppm after eFuse XTAL_CAL applies, set `wifi_xtal_trim2`; use `wifi_xtal_trim3` for a second pass. Each step ≈1–2 ppm.
+
+2. Connect a power sensor to the matching-circuit test point and measure conducted TX power at 54 Mbps. `TX0_POWER` is the target in dBm at 54 Mbps (§ 2.15). Adjust `wifi_tx0_power` until the level meets the budget (regulatory EIRP − SR4W035 average gain − trace/matching loss). Confirm `wifi_tx0_pa_tssi_msb` ≠ `0xFF` — the driver treats `0xFF` as an invalid TSSI sentinel and silently disables TSSI feedback. Then set `wifi_nic_confg_1 = 00 20` to enable TSSI_COMP closed-loop regulation to this calibrated target.
+
+3. Sweep CH1, CH6, CH11, CH14 and record power deviation from the CH6 reference. For any group outside ±1 dB, update the corresponding channel-offset register (`wifi_tx0_pwr_ofst_l/m/h`). Field encoding: `bit[7]=EN, bit[6]=INC (0=decrease, 1=increase), bits[5:0]=delta`; 1 step ≈ 0.5 dBm. Examples: `0x83`=−1.5 dB, `0x80`=0 dB, `0xC3`=+1.5 dB.
+
+4. Measure EVM at each rate group (CCK, OFDM 6–54M, HT MCS). Reduce the corresponding `wifi_tx_pwr_*` register where EVM is marginal, working highest-rate first. Field encoding: `bit[7]=COMP_EN, bit[6]=INC (0=decrease), bits[5:0]=delta`; 1 step = 0.5 dBm relative to `TX0_POWER`. Examples: `0x82`=−1 dBm, `0xC2`=+1 dBm, `0xC3`=+1.5 dBm, `0xC0`=0 dBm.
+
+5. Verify HT40 TX power on the primary channel at MCS=7. `TX_POWER_DELTA = 0x82` (`DELTA_EN=1, DELTA_INC=0, DELTA=2`) applies an automatic −1 dBm de-rating for 40 MHz vs 20 MHz; increase DELTA if more headroom is needed to meet the regulatory EIRP limit at HT40.
+
+6. Measure crystal frequency deviation (skip if XO tolerance is within spec). If error >±20 ppm after eFuse XTAL_CAL applies, set `wifi_xtal_trim2`; use `wifi_xtal_trim3` for a second pass. Each step ≈1–2 ppm. The TSSI temperature-compensation step table (`STEP_NUM_*`, `0x00C6`–`0x00D6`) uses datasheet default values and does not require remeasurement unless TSSI_COMP is active and temperature-induced drift is observed at production extremes.
