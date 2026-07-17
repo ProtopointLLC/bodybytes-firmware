@@ -18,10 +18,10 @@ Prerequisites (JTAG):
   3. OpenWrt recovery image at the path in scripts/config.ini [paths]->recovery_bin
 
 Usage:
-  flash_nor_images.py --full-erase                      # JTAG: erase entire chip only
-  flash_nor_images.py --all                             # JTAG: flash all partitions
-  flash_nor_images.py --all --mac XX:XX:XX:XX:XX:XX     # override MAC address
-  flash_nor_images.py --file                            # assemble full image to build/
+  flash_nor_images.py --bodybytes --full-erase
+  flash_nor_images.py --bodybytes --all --mac XX:XX:XX:XX:XX:XX
+  flash_nor_images.py --vocore2   --all --mac XX:XX:XX:XX:XX:XX
+  flash_nor_images.py --bodybytes --file --mac XX:XX:XX:XX:XX:XX
 
 Connection settings are read from scripts/config.ini.
 """
@@ -29,7 +29,6 @@ Connection settings are read from scripts/config.ini.
 import argparse
 import os
 import re
-import struct
 import subprocess
 import tempfile
 import zlib
@@ -43,13 +42,13 @@ from lib.log import log, err, oc as _oc, ub as _ub
 from lib.config import (
     OPENOCD_HOST, OPENOCD_PORT,
     SERIAL_PORT, SERIAL_BAUD,
-    STAGING_ADDR, NOR_SIZE, NOR_SECTOR_SIZE,
-    NOR_CHIP_NAME, NOR_FLASHROM_PROG,
+    STAGING_ADDR, NOR_SECTOR_SIZE, NOR_FLASHROM_PROG,
     UBOOT_BIN, UBOOT_ENV_TXT, UBOOT_DEFCONFIG, MKENVIMAGE,
     RECOVERY_BIN, NOR_IMAGE,
-    WIFI_CHIP_ID, WIFI_MAC,
+    BOARD_NAMES, load_board, BoardConfig,
 )
 from lib.dts import parse_nor_partitions, parse_wifi_cal_size
+from lib.wifi import build_factory as _wifi_build_factory
 
 
 # --- blob generation ---
@@ -63,44 +62,29 @@ def _read_env_size() -> int:
     err(f"CONFIG_ENV_SIZE not found in {UBOOT_DEFCONFIG}")
 
 
-def _build_env_bin(recovery_size: int) -> bytes:
+def _build_env_bin() -> bytes:
     if not MKENVIMAGE.exists():
         err(f"mkenvimage not found: {MKENVIMAGE}  (build U-Boot first)")
+    if not UBOOT_ENV_TXT.exists():
+        err(f"not found: {UBOOT_ENV_TXT}")
     env_size = _read_env_size()
-    env_text = re.sub(
-        r'^recovery_size=.*$',
-        f'recovery_size={recovery_size:#x}',
-        UBOOT_ENV_TXT.read_text(),
-        flags=re.MULTILINE,
-    )
-    tmp_in_fd, tmp_in = tempfile.mkstemp(suffix='.env')
-    tmp_out_fd, tmp_out = tempfile.mkstemp(suffix='.bin')
+    tmp_fd, tmp_out = tempfile.mkstemp(suffix='.bin')
+    os.close(tmp_fd)
     try:
-        os.write(tmp_in_fd, env_text.encode('ascii'))
-        os.close(tmp_in_fd)
-        os.close(tmp_out_fd)
         subprocess.run(
-            [str(MKENVIMAGE), '-s', str(env_size), '-o', tmp_out, tmp_in],
+            [str(MKENVIMAGE), '-s', str(env_size), '-o', tmp_out, str(UBOOT_ENV_TXT)],
             check=True,
         )
         data = Path(tmp_out).read_bytes()
     finally:
-        for p in (tmp_in, tmp_out):
-            try:
-                Path(p).unlink()
-            except FileNotFoundError:
-                pass
+        Path(tmp_out).unlink(missing_ok=True)
     if len(data) != env_size:
         err(f"mkenvimage produced {len(data)} B, expected {env_size}")
     return data
 
 
-def _build_factory(mac: bytes) -> bytes:
-    cal_size = parse_wifi_cal_size()
-    eeprom = bytearray(cal_size)
-    struct.pack_into("<H", eeprom, 0x00, WIFI_CHIP_ID)
-    eeprom[0x04:0x0a] = mac
-    return bytes(eeprom)
+def _build_factory(mac: bytes, board: BoardConfig) -> bytes:
+    return _wifi_build_factory(mac, board.wifi, parse_wifi_cal_size())
 
 
 def parse_mac(s: str) -> bytes:
@@ -109,12 +93,12 @@ def parse_mac(s: str) -> bytes:
     mac = bytes(int(x, 16) for x in s.split(":"))
     if mac == b"\x00" * 6:
         raise argparse.ArgumentTypeError("MAC must not be all zeros")
-    if mac == b"\xff" * 6:
-        raise argparse.ArgumentTypeError("MAC must not be broadcast")
+    if mac[0] & 0x01:
+        raise argparse.ArgumentTypeError("MAC must not be multicast (LSB of first octet must be 0)")
     return mac
 
 
-def _prepare_blobs(selected: list[str], mac: bytes) -> dict[str, bytes]:
+def _prepare_blobs(selected: list[str], mac: bytes, board: BoardConfig) -> dict[str, bytes]:
     blobs: dict[str, bytes] = {}
 
     if "u-boot" in selected:
@@ -122,23 +106,20 @@ def _prepare_blobs(selected: list[str], mac: bytes) -> dict[str, bytes]:
             err(f"not found: {UBOOT_BIN}  (build U-Boot first)")
         blobs["u-boot"] = UBOOT_BIN.read_bytes()
 
-    # Recovery data is needed either to flash it, or to derive recovery_size for the env
-    recovery_data: bytes | None = None
-    recovery_size = 0
-    if "recovery" in selected or "u-boot-env" in selected:
-        if not RECOVERY_BIN.exists():
-            err(f"not found: {RECOVERY_BIN}  (build OpenWrt first)")
-        recovery_data = RECOVERY_BIN.read_bytes()
-        recovery_size = (len(recovery_data) + NOR_SECTOR_SIZE - 1) & ~(NOR_SECTOR_SIZE - 1)
-        log(f"recovery: {len(recovery_data):#x} bytes → recovery_size={recovery_size:#x}")
-        if "recovery" in selected:
-            blobs["recovery"] = recovery_data
+    if "recovery" in selected:
+        matches = sorted(RECOVERY_BIN.parent.glob(RECOVERY_BIN.name))
+        if not matches:
+            err(f"no file matching {RECOVERY_BIN}  (build OpenWrt first)")
+        if len(matches) > 1:
+            err(f"ambiguous recovery glob matched {len(matches)} files: {[m.name for m in matches]}")
+        log(f"recovery image: {matches[0].name}")
+        blobs["recovery"] = matches[0].read_bytes()
 
     if "u-boot-env" in selected:
-        blobs["u-boot-env"] = _build_env_bin(recovery_size)
+        blobs["u-boot-env"] = _build_env_bin()
 
     if "factory" in selected:
-        blobs["factory"] = _build_factory(mac)
+        blobs["factory"] = _build_factory(mac, board)
 
     return blobs
 
@@ -149,11 +130,6 @@ def _flash_jtag(openocd: OpenOCD, uboot: UBoot,
                 label: str, data: bytes, flash_offset: int) -> None:
     total = len(data)
     log(f"Flashing '{label}': {total:#x} bytes at NOR offset {flash_offset:#x}")
-
-    uboot.sync(timeout=5)
-    out = _ub(uboot, "sf probe", timeout=10)
-    if "Detected" not in out:
-        err(f"sf probe failed:\n{out}")
 
     load_timeout = max(60, total // (70 * 1024) * 3)
     _oc(openocd, "halt", timeout=10)
@@ -183,8 +159,12 @@ def _flash_jtag(openocd: OpenOCD, uboot: UBoot,
         err(f"crc32 (staging) output unparseable:\n{out}")
     if staging_crc != expected_crc:
         err(f"DRAM staging CRC mismatch: got {staging_crc:#010x}, expected {expected_crc:#010x}"
-            f" — load_image corrupted data")
+            f" - load_image corrupted data")
     log(f"DRAM staging CRC verified: {staging_crc:#010x}")
+
+    out = _ub(uboot, "sf probe", timeout=10)
+    if "Detected" not in out:
+        err(f"sf probe (pre-update) failed:\n{out}")
 
     out = _ub(uboot, f"sf update {STAGING_ADDR:#x} {flash_offset:#x} {total:#x}",
               timeout=update_timeout)
@@ -205,10 +185,26 @@ def _flash_jtag(openocd: OpenOCD, uboot: UBoot,
     log(f"CRC32 verified: {actual_crc:#010x}")
 
 
+def _probe_nor(uboot: UBoot, board: BoardConfig) -> None:
+    out = _ub(uboot, "sf probe", timeout=10)
+    if "Detected" not in out:
+        err(f"sf probe failed:\n{out}")
+    detected_line = next((l for l in out.splitlines() if "Detected" in l), out.strip())
+    log(f"sf probe: {detected_line.strip()}")
+    m = re.search(r'total\s+(\d+)\s+(MiB|KiB|Bytes?)', out)
+    if not m:
+        err(f"sf probe: cannot parse chip size from:\n{out}")
+    val, unit = int(m.group(1)), m.group(2)
+    detected = val * (1024 * 1024 if unit == "MiB" else 1024 if unit == "KiB" else 1)
+    if detected != board.nor_size:
+        err(f"NOR size mismatch: chip reports {detected // (1024 * 1024)} MiB, "
+            f"board profile '{board.name}' expects {board.nor_size // (1024 * 1024)} MiB")
+
+
 # --- file strategy ---
 
-def _flash_file(selected: list[str], partitions: dict) -> None:
-    img = bytearray(b"\xff" * NOR_SIZE)
+def _flash_file(selected: list[str], partitions: dict, board: BoardConfig) -> None:
+    img = bytearray(b"\xff" * board.nor_size)
     for name in selected:
         data = partitions[name]["data"]
         offset = partitions[name]["offset"]
@@ -219,7 +215,7 @@ def _flash_file(selected: list[str], partitions: dict) -> None:
     NOR_IMAGE.parent.mkdir(parents=True, exist_ok=True)
     NOR_IMAGE.write_bytes(img)
     log(f"Written: {NOR_IMAGE}  ({len(img) // (1024 * 1024)} MB)")
-    log(f"Program with: flashrom -p {NOR_FLASHROM_PROG} -c {NOR_CHIP_NAME} --force -w {NOR_IMAGE}")
+    log(f"Program with: flashrom -p {NOR_FLASHROM_PROG} -c {board.nor_chip_name} --force -w {NOR_IMAGE}")
 
 
 # --- main ---
@@ -229,6 +225,12 @@ def main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+
+    board_grp = p.add_mutually_exclusive_group(required=True)
+    for name in BOARD_NAMES:
+        board_grp.add_argument(f"--{name}", dest="board", action="store_const", const=name,
+                               help=f"target board: {name}")
+
     p.add_argument("--jtag", dest="strategy", action="store_const", const="jtag",
                    help="use JTAG + U-Boot sf (default)")
     p.add_argument("--file", dest="strategy", action="store_const", const="file",
@@ -236,11 +238,10 @@ def main():
     p.set_defaults(strategy="jtag")
 
     p.add_argument("--full-erase", action="store_true",
-                   help=f"JTAG: erase entire chip ({NOR_SIZE // (1024 * 1024)} MB); "
-                        f"mutually exclusive with partition flags")
+                   help="JTAG: erase entire chip; mutually exclusive with partition flags")
     p.add_argument("--mac", type=parse_mac, default=None,
                    metavar="XX:XX:XX:XX:XX:XX",
-                   help=f"WiFi MAC address (default from config.ini: {WIFI_MAC.hex(':')})")
+                   help="WiFi MAC address (required when flashing the factory partition)")
 
     sel = p.add_argument_group("partition selection (at least one required, except with --full-erase)")
     sel.add_argument("--all",        action="store_true", help="flash all partitions")
@@ -259,15 +260,22 @@ def main():
     if args.strategy == "file" or args.all:
         args.u_boot = args.u_boot_env = args.factory = args.recovery = True
 
-    mac = args.mac if args.mac is not None else WIFI_MAC
+    if args.factory and args.mac is None:
+        p.error("--mac XX:XX:XX:XX:XX:XX is required when flashing the factory (WiFi EEPROM) partition")
+
+    mac = args.mac
 
     selected = [k for k in ["u-boot", "u-boot-env", "factory", "recovery"]
                 if getattr(args, k.replace("-", "_"))]
     if not args.full_erase and not selected:
         p.error("select at least one partition: --u-boot / --u-boot-env / --factory / --recovery / --all")
 
+    board = load_board(args.board)
+    log(f"Board: {board.name}  NOR: {board.nor_size // (1024 * 1024)} MB ({board.nor_chip_name})"
+        f"  DRAM: {board.dram_size_mb} MB")
+
     if not args.full_erase:
-        blobs = _prepare_blobs(selected, mac)
+        blobs = _prepare_blobs(selected, mac, board)
         dts = parse_nor_partitions()
         partitions = {}
         for label in ["u-boot", "u-boot-env", "factory", "recovery"]:
@@ -277,7 +285,7 @@ def main():
             partitions[label] = {"data": blobs.get(label, b""), "offset": offset, "size": size}
 
     if args.strategy == "file":
-        _flash_file(selected, partitions)
+        _flash_file(selected, partitions, board)
         log("Done")
         return
 
@@ -305,24 +313,28 @@ def main():
     if not prompt_found:
         openocd.close()
         uboot.close()
-        err("No U-Boot prompt on serial port — is U-Boot running at the => prompt?")
+        err("No U-Boot prompt on serial port - is U-Boot running at the => prompt?")
     log("U-Boot prompt confirmed")
 
     try:
+        uboot.sync(timeout=5)
+        _probe_nor(uboot, board)
+
         if args.full_erase:
-            log(f"Erasing entire chip ({NOR_SIZE:#x} bytes)")
-            out = _ub(uboot, "sf probe", timeout=10)
-            if "Detected" not in out:
-                err("sf probe failed")
-            out = _ub(uboot, f"sf erase 0 {NOR_SIZE:#x}", timeout=600)
+            log(f"Erasing entire chip ({board.nor_size:#x} bytes)")
+            out = _ub(uboot, f"sf erase 0 {board.nor_size:#x}", timeout=600)
             if "OK" not in out:
                 err("sf erase failed")
         else:
             for name in selected:
+                data = partitions[name]["data"]
+                part_size = partitions[name]["size"]
+                if len(data) > part_size:
+                    err(f"'{name}' binary ({len(data):#x} B) exceeds partition ({part_size:#x} B)")
                 _flash_jtag(
                     openocd, uboot,
                     label=name,
-                    data=partitions[name]["data"],
+                    data=data,
                     flash_offset=partitions[name]["offset"],
                 )
     finally:
