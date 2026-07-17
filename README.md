@@ -1,14 +1,14 @@
 # bodybytes-firmware
 
-Development environment for the bodybytes implantable WiFi router — MT7628AN
+Development environment for the bodybytes implantable WiFi router - MT7628AN
 SoC, 256 MB DDR2, 64 MB SPI NOR, 128 GB eMMC.
 
 ## Submodules
 
 | Path | Contents |
 |------|----------|
-| `u-boot/` | U-Boot `v2026.04`, branch `bodybytes` — board support for MT7628AN |
-| `openwrt/` | OpenWRT `v25.12.4`, branch `bodybytes` — board target and DTS for bodybytes |
+| `u-boot/` | U-Boot `v2026.04`, branch `bodybytes` - board support for MT7628AN |
+| `openwrt/` | OpenWRT `v25.12.4`, branch `bodybytes` - board target and DTS for bodybytes |
 
 The MT7628 OpenOCD target scripts (`mt7628.cfg`, `mmio.tcl`, `memc.tcl`) in `openocd/` are vendored from [mtk-openwrt/openocd-scripts](https://github.com/mtk-openwrt/openocd-scripts) and patched to comply with recent OpenOCD versions.
 
@@ -49,9 +49,9 @@ Reachable at `https://bodybytes.local`, `https://192.168.1.1`, or `https://fd13:
 
 ## Documentation
 
-- [docs/building.md](docs/building.md) — build U-Boot and OpenWRT from source
-- [docs/jtag.md](docs/jtag.md) — JTAG wiring, connectivity check, PLL/DRAM bootstrap
-- [docs/uboot.md](docs/uboot.md) — U-Boot board files, NOR image, and env layout
-- [docs/flashing.md](docs/flashing.md) — full first-install and sysupgrade procedures
-- [docs/openwrt.md](docs/openwrt.md) — OpenWRT board files, DTS, and package reference
-- [docs/vocore2.md](docs/vocore2.md) — VoCore2 bringup notes (development reference board)
+- [docs/building.md](docs/building.md) - build U-Boot and OpenWRT from source
+- [docs/jtag.md](docs/jtag.md) - JTAG wiring, connectivity check, PLL/DRAM bootstrap
+- [docs/uboot.md](docs/uboot.md) - U-Boot board files, NOR image, and env layout
+- [docs/flashing.md](docs/flashing.md) - full first-install and sysupgrade procedures
+- [docs/openwrt.md](docs/openwrt.md) - OpenWRT board files, DTS, and package reference
+- [docs/vocore2.md](docs/vocore2.md) - VoCore2 bringup notes (development reference board)

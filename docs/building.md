@@ -1,6 +1,6 @@
 # Building
 
-Prerequisites: `u-boot` and `openwrt` are git submodules — run `git submodule update --init --recursive` if either directory is empty.
+Prerequisites: `u-boot` and `openwrt` are git submodules - run `git submodule update --init --recursive` if either directory is empty.
 
 ---
 
@@ -40,7 +40,11 @@ make -j$(nproc)
 | [`u-boot/spl/u-boot-spl.bin`](../u-boot/spl/u-boot-spl.bin) | SPL; runs from NOR flash, initialises PLL+DRAM, then loads and jumps to U-Boot proper. |
 | [`u-boot/u-boot-with-spl.bin`](../u-boot/u-boot-with-spl.bin) | Combined NOR image: SPL immediately followed by LZMA-compressed U-Boot. Write to NOR offset 0. |
 
-`CONFIG_SKIP_LOWLEVEL_INIT=y` is set, so `u-boot.bin` expects PLL and DRAM already initialised — exactly what the JTAG OpenOCD scripts provide for RAM boot.
+`CONFIG_SKIP_LOWLEVEL_INIT=y` is set, so `u-boot.bin` expects PLL and DRAM already initialised - exactly what the JTAG OpenOCD scripts provide for RAM boot.
+
+### VS Code tasks
+
+The _**U-Boot: Build**_ task (default build task, `Ctrl+Shift+B`) runs `make mrproper`, `make bodybytes_defconfig`, and `make -j$(nproc)` inside `nix develop .#uboot` in one shot - no manual shell entry required.
 
 → See [flashing.md §4](flashing.md#4--program-spi-nor) for NOR programming.
 
@@ -50,7 +54,7 @@ make -j$(nproc)
 
 See [openwrt.md](openwrt.md) for board file documentation and sysupgrade internals.
 
-OpenWrt builds its own MIPS cross-compiler from source. Do **not** use the U-Boot `nix develop .#uboot` shell — it sets `CROSS_COMPILE` and `ARCH`, which would interfere.
+OpenWrt builds its own MIPS cross-compiler from source. Do **not** use the U-Boot `nix develop .#uboot` shell - it sets `CROSS_COMPILE` and `ARCH`, which would interfere.
 
 ### Dev shell
 
@@ -76,7 +80,7 @@ cp ../bodybytes.config .config
 make defconfig
 ```
 
-[`bodybytes.config`](../bodybytes.config) seeds the target/board selection and board-specific Kconfig options: `CONFIG_EMMC_SUPPORT=y` ensures `emmc.sh` is included in the base-files package; `CONFIG_SAMBA4_SERVER_AVAHI=y` builds samba4 with avahi client support so smbd registers `_smb._tcp` with avahi-daemon dynamically. `CONFIG_TARGET_MULTI_PROFILE=y` enables building both device profiles (`bodybytes_bodybytes` and `bodybytes_bodybytes_recovery`) in one pass — without it the device symbols are in a Kconfig `choice` and only the last one set is built. `make defconfig` expands the seed into a full `.config`. To add or change packages, run `make menuconfig` afterwards.
+[`bodybytes.config`](../bodybytes.config) seeds the target/board selection and board-specific Kconfig options: `CONFIG_EMMC_SUPPORT=y` ensures `emmc.sh` is included in the base-files package; `CONFIG_SAMBA4_SERVER_AVAHI=y` builds samba4 with avahi client support so smbd registers `_smb._tcp` with avahi-daemon dynamically. `CONFIG_TARGET_MULTI_PROFILE=y` enables building both device profiles (`bodybytes_bodybytes` and `bodybytes_bodybytes_recovery`) in one pass - without it the device symbols are in a Kconfig `choice` and only the last one set is built. `make defconfig` expands the seed into a full `.config`. To add or change packages, run `make menuconfig` afterwards.
 
 ### Build
 
@@ -104,5 +108,15 @@ openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-initramfs-kernel.bin
 | [`openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-initramfs-kernel.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-initramfs-kernel.bin) | `bodybytes_bodybytes` | Initramfs kernel for the main profile; useful for RAM-boot testing without eMMC. |
 | [`openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin) | `bodybytes_bodybytes_recovery` | Initramfs kernel written to NOR `recovery` partition at `0x060000` by [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py), which also reads its size to derive `recovery_size` for the env partition. |
 | [`openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-initramfs-kernel.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-initramfs-kernel.bin) | `bodybytes_bodybytes_recovery` | Same content as `squashfs-recovery.bin`; intermediate build artifact. |
+
+### VS Code tasks
+
+| Task | What it runs |
+|------|-------------|
+| _**OpenWrt: Setup**_ | Feeds update + install, configure, download - use on first checkout |
+| _**OpenWrt: Download Packages**_ | Configure + download only (skip feeds re-update on incremental builds) |
+| _**OpenWrt: Build**_ | Configure + `make V=s world -j$(nproc)` |
+
+All three tasks enter `nix develop .#openwrt` automatically - no manual shell entry required.
 
 → See [flashing.md §3](flashing.md#3--assemble-nor-image) to assemble the NOR image and [flashing.md §4](flashing.md#4--program-spi-nor) to program NOR. See [flashing.md §5](flashing.md#5--emmc) for initial eMMC install.
