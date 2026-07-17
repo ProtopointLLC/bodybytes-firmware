@@ -5,13 +5,16 @@
 
   outputs = { self, nixpkgs }:
     let
-      pkgs = import nixpkgs {
-        system = "x86_64-linux";
-      };
-      crossPkgs = pkgs.pkgsCross.mipsel-linux-gnu;
+      systems = [ "x86_64-linux" "aarch64-linux" ];
+      forAllSystems = nixpkgs.lib.genAttrs systems;
     in
     {
-      devShells.x86_64-linux = {
+      devShells = forAllSystems (system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          crossPkgs = pkgs.pkgsCross.mipsel-linux-gnu;
+        in
+        {
 
         # U-Boot build + JTAG/OpenOCD.
         uboot = pkgs.mkShell {
@@ -67,7 +70,7 @@
           ];
         }).env;
 
-      };
+        });
 
     };
 }
