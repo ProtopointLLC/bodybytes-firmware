@@ -51,7 +51,8 @@ On a production MT7628AN the OTP is fully programmed, so the merge always fires 
 | `NIC_CONFG_0` | `0x0034` | 2 | RW | `wifi_nic_confg_0` | `22 34` | `11 34` | `11 34` | Y | N | Y | TX/RX path; byte[0] bits[7:4]=TX_PATH bits[3:0]=RX_PATH; `0x11`=1T1R |
 | `NIC_CONFG_1` | `0x0036` | 2 | RW | `wifi_nic_confg_1` | `00 00` | `00 20` | *Default* | Y | N | Y | TSSI_COMP[13], ANT_DIV_CTRL[12:11], BW_40M_2P4G[8] (0=enable 40M), WF0/1_AUX[2:3], TX_POWER[1], HW_RADIO[0]; `0x2000`=TSSI_COMP only |
 | `COUNTRY_REG` | `0x0039` | 1 | RW | `wifi_country_reg` | `ff` | *Default* | *Default* | Y | N | Y | BAND_2P4G[7:0] channel plan; 0=CH1-11, 1=CH1-13, 5=CH1-14; 0xFF (reset) = read from host/INF registry |
-| *xtal_trim_1* | `0x003A` | 2 | UNK | `wifi_xtal_trim_1` | `00 01` | *Default* | *Default* | **N** | N | Y | MT_EE_XTAL_TRIM_1; byte[1] at `0x3b` = LED_MODE (reset `01`); only byte[1] sent to MCU |
+| *xtal_trim_1* | `0x003A` | 1 | UNK | `wifi_xtal_trim_1` | `00` | *Default* | *Default* | **N** | N | **N** | Byte[0] of MT_EE_XTAL_TRIM_1; not forwarded to MCU; purpose unknown |
+| `LED_MODE` | `0x003B` | 1 | RW | `wifi_led_mode` | `01` | *Default* | *Default* | Y | N | Y | LED_CTRL; WiFi MCU LED behavior mode |
 | `NIC_CONFG_2` | `0x0042` | 2 | RW | `wifi_nic_confg_2` | `22 00` | *Default* | *Default* | Y | N | Y | TEMP_COMP_DIS[11], XTAL_OPT[10:9], ANT_DIV[8]; TX_STREAM[7:4], RX_STREAM[3:0]; `0x0022`=2T2R |
 | `EXT_LNA_GAIN` | `0x0044` | 1 | RW | `wifi_ext_lna_gain` | `00` | *Default* | *Default* | Y | N | **N** | EXT_LNA_2P4G |
 | `RSSI_OFST` | `0x0046` | 2 | RW | `wifi_rssi_ofst` | `00 00` | *Default* | *Default* | Y | N | **N** | byte[1]=RSSI1_OFST[15:8], byte[0]=RSSI0_OFST[7:0]; per-chain 2.4G RX RSSI correction |
