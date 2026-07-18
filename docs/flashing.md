@@ -168,9 +168,9 @@ Create a GPT with `parted -s /dev/mmcblk0 mklabel gpt`, then create the four par
 
 Transfer `sysupgrade.bin` to the device and run sysupgrade. Either:
 
-*Via LuCI web interface:* open `http://192.168.1.1` → System → Backup / Flash Firmware → Flash new firmware image → upload [`openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin).
+_Via LuCI web interface:_ open `http://192.168.1.1` → System → Backup / Flash Firmware → Flash new firmware image → upload [`openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin).
 
-*Via SSH:* copy `sysupgrade.bin` to `/tmp/` on the device with `scp`, then run `sysupgrade -n /tmp/<filename>` on the device (`-n` skips preserving settings, appropriate for first install).
+_Via SSH:_ copy `sysupgrade.bin` to `/tmp/` on the device with `scp`, then run `sysupgrade -n /tmp/<filename>` on the device (`-n` skips preserving settings, appropriate for first install).
 
 `emmc_do_upgrade` finds `kernel` and `rootfs` partitions by GPT label, writes the kernel and squashfs, and reboots into the new firmware. All subsequent upgrades follow the same flow (web UI or `sysupgrade`), without the partitioning step.
 
@@ -193,6 +193,7 @@ See [openwrt.md](openwrt.md) for the board profile and sysupgrade dispatch.
 MDI_TP_P1 (SoC pin 40, GPIO#14) is connected to a **Texas Instruments DRV5032FCDBZT** hall-effect sensor. The sensor is omnipolar (activates on either magnet pole), operates at 3.3 V, and has an active-low open-drain output with a pull-up resistor on the board. Holding a magnet near the sensor pulls GPIO#14 low.
 
 U-Boot reads GPIO#14 at startup before attempting any boot:
+
 - **GPIO#14 high** (no magnet) → normal boot from eMMC
 - **GPIO#14 low** (magnet present) → recovery boot directly from NOR
 
@@ -209,12 +210,14 @@ A blank or corrupt env partition always falls back to the compiled-in values, so
 ### 6c - Boot sequence
 
 Normal boot:
+
 1. U-Boot reads GPIO#14 → high → runs `bootcmd_normal`
 2. Sets `bootargs` to `console=ttyS0,115200 root=/dev/mmcblk0p2 rootwait`, then reads GPT partition 1 (`kernel`) from eMMC into RAM at `kernel_addr_r` (0x82000000) using `part start`/`part size` + `mmc read`
 3. `bootm 0x82000000` parses the FIT image: extracts and decompresses the kernel, extracts the DTB, applies memory and bootargs fixup to the DTB, then jumps to the kernel entry
 4. Linux mounts squashfs rootfs (p2) as root; libfstools (fstools) detects the `rootfs_data` GPT label on p3 and layers it at `/overlay` via overlayfs
 
 Recovery boot:
+
 1. U-Boot reads GPIO#14 → low → runs `bootcmd_recovery`
 2. `sf probe` switches W25Q512JV to 4-byte mode; `sf read` copies `recovery_size` bytes from NOR offset `0x60000` into RAM at `kernel_addr_r`
 3. `bootm ${kernel_addr_r}` parses the FIT image, decompresses the initramfs kernel, and boots with the embedded DTB

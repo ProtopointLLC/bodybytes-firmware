@@ -70,23 +70,24 @@ The normal path for updating NOR is via JTAG with [`scripts/flash_nor_images.py`
 
 Together these mirror what `sd_iot_mode` does in `bodybytes_uboot.dtsi`, routing the SDXC data/cmd/clk lines to EPHY P3/P4 MDI pads (SoC pins 51–57).
 
-**`mdi_p1_gpio`** - sets `GPIO_MODE SPIS = gpio`, switching MDI P1 pads to GPIO function. Makes MDI_TN_P1 (GPIO#15) driveable as the eMMC hardware reset output. Without this, the `emmc_pwrseq` GPIO write has no effect.
+**`state_default`** - the system-wide default pinctrl state (inherited placeholder from `mt7628an.dtsi`, populated by the bodybytes DTSI). Sets `GPIO_MODE SPIS = gpio`, switching MDI P1 pads to GPIO function. Applied at pinctrl init time, covering both consumers of MDI P1 GPIOs: the `emmc_pwrseq` GPIO#15 reset and the `gpio-keys` GPIO#14 boot-mode sensor. Applied early enough that neither driver races the mux.
 
 #### eMMC power sequencer
 
 A `mmc-pwrseq-emmc` node wired to `reset-gpios = <&gpio 15 GPIO_ACTIVE_LOW>`. MDI_TN_P1 (SoC pin 42, GPIO#15) is pulsed low at power-up by the `mmc-pwrseq-emmc` driver to clear fault conditions. The eMMC RST_n function is disabled by default (EXT_CSD[162] = 0x00) so pulsing is a safe no-op; if the OS later enables RST_n the pulse will perform a real reset on subsequent power-ups.
 
-#### eMMC - `&sdhci`
+#### eMMC / microSD - `&sdhci`
 
-Kingston EMMC128-IY29-5B111, 128 GB eMMC 5.1, on EPHY P3/P4 MDI pads (SoC pins 51–57).
+Kingston EMMC128-IY29-5B111, 128 GB eMMC 5.1 (or microSD), on EPHY P3/P4 MDI pads (SoC pins 51–57). The controller probes SD protocol first (ACMD41); if that times out it falls through to MMC (CMD1), so either medium works with no DTS change. Both are treated as always-inserted (`non-removable`).
 
 | Property | Value | Reason |
 |----------|-------|--------|
-| `pinctrl-0` | `sdxc_iot_mode mdi_p1_gpio` | Overrides base `sdxc_pins`; applies EPHY routing and SPIS GPIO mode |
-| `vmmc-supply` | `reg_3v3` | Explicit 3.3 V supply for eMMC VCC; without this the mtk-msdc driver cannot negotiate voltage and fails with `no support for card's volts` |
-| `vqmmc-supply` | `reg_3v3` | Explicit 3.3 V supply for eMMC VCCQ (I/O signalling) |
+| `pinctrl-0` | `sdxc_iot_mode` | Overrides base `sdxc_pins`; applies EPHY routing. SPIS→GPIO mux is handled by `state_default` at pinctrl init. |
+| `vmmc-supply` | `reg_3v3` | Overrides the base DTSi `reg_vmmc` supply; explicit 3.3 V rail for eMMC VCC |
+| `vqmmc-supply` | `reg_3v3` | Overrides the base DTSi `reg_vqmmc` supply; explicit 3.3 V rail for eMMC VCCQ |
 | `no-1-8-v` | - | Prevents voltage-switch negotiation to 1.8 V; MT7628 SDXC runs at 3.3 V only |
-| `mediatek,cd-poll` | - | Software card-detect polling; used instead of `non-removable` for compatibility with the removable Hardkernel eMMC module on VoCore2 |
+| `non-removable` | - | Card is always present; no CD polling needed |
+| `no-sdio` | - | Prevents SDIO (CMD5) probe; without this the MSDC driver sets `SDC_CFG_SDIO` in hardware and CMD5 causes "no support for card's volts" + CMD1 busy-poll timeout |
 | `mmc-pwrseq` | `emmc_pwrseq` | Links hardware reset GPIO (GPIO#15, MDI_TN_P1) |
 
 `cap-mmc-highspeed` and `bus-width = <4>` are inherited from `mt7628an.dtsi`. High Speed SDR mode (≤52 MHz, ≤52 MB/s) is the fastest mode the MT7628 SDXC controller supports at 3.3 V VCCQ; HS200/HS400 require 1.8 V and are unreachable regardless.
@@ -99,7 +100,7 @@ A `gpio-keys` node exposes a `boot-mode` button on `gpios = <&gpio 14 GPIO_ACTIV
 
 The `button-hotplug` module maps `BTN_0` → `BUTTON=BTN_0`. Hotplug scripts in `/etc/hotplug.d/button/` match on `[ "$BUTTON" = "BTN_0" ]`. The DTS `label` is used only as the GPIO consumer description in `/sys/kernel/debug/gpio`; it does not affect `BUTTON=`.
 
-GPIO#14 is on the same MDI P1 pad group as GPIO#15 (eMMC reset), so `mdi_p1_gpio` pinctrl state (which sets `SPIS_MODE=gpio`) is required for both. The `gpio-keys` driver claims GPIO#14 at probe time, preventing accidental userspace re-export.
+GPIO#14 is on the same MDI P1 pad group as GPIO#15 (eMMC reset). The `state_default` pinctrl state (sets `SPIS_MODE=gpio`) covers both; it fires at pinctrl init time, before either `gpio-keys` or `mmc-pwrseq-emmc` probes. The `gpio-keys` driver claims GPIO#14 at probe time, preventing accidental userspace re-export.
 
 #### Ethernet - `&ethernet` / `&esw`
 
@@ -111,7 +112,7 @@ UART0 is disabled (`status = "disabled"`). `mt7628an.dtsi` leaves `uartlite` ena
 
 #### 3.3 V regulator - `reg_3v3`
 
-A `regulator-fixed` node providing a permanent 3.3 V rail (`regulator-always-on`), referenced by `vmmc-supply` and `vqmmc-supply` on `&sdhci`. The MT7628 SDXC controller is hard-wired to 3.3 V; declaring the regulator explicitly prevents the mtk-msdc driver from attempting voltage negotiation and failing with `no support for card's volts`.
+A `regulator-fixed` node providing a permanent 3.3 V rail (`regulator-always-on`), overriding the base DTSi `reg_vmmc`/`reg_vqmmc` supplies for `vmmc-supply` and `vqmmc-supply` on `&sdhci`. The MT7628 SDXC controller is hard-wired to 3.3 V; the explicit regulator ensures the OCR mask is correct for voltage negotiation. Note: the `no support for card's volts` boot error is caused by missing `no-sdio` (SDIO CMD5 probe with `SDC_CFG_SDIO` set), not by absent voltage supplies.
 
 #### UART2 - `&uart2`
 
@@ -144,6 +145,7 @@ GPT partition 1 (`kernel`) holds the raw FIT image blob with no filesystem. `emm
 `IMAGE/recovery.bin` copies the already-built initramfs FIT image into an explicit build output. U-Boot boots it via `sf read` from NOR offset `0x60000` into RAM, then `bootm`. This file is written to the NOR `recovery` partition at `0x060000` by [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py), which also reads its size to set `recovery_size` in the env partition.
 
 **`BODYBYTES_PACKAGES`** (both profiles):
+
 - `openssh-sftp-server` + `rsync` - needed in recovery to transfer a sysupgrade image into the device before flashing.
 - `avahi-daemon` - advertises `bodybytes.local` via mDNS; useful in recovery where the user has no easy way to find the device IP.
 - `e2fsprogs` - `e2fsck`/`resize2fs`/`tune2fs` for ext4 maintenance on the data partition and for `mkfs.ext4` after `parted` creates partitions in recovery.
@@ -153,6 +155,7 @@ GPT partition 1 (`kernel`) holds the raw FIT image blob with no filesystem. `emm
 - `luci-ssl-openssl` - LuCI collection package that pulls in `luci-light`, `libustream-openssl`, and `openssl-util`. Enables HTTPS for the LuCI web interface; uhttpd listens on both port 80 (HTTP, redirects to HTTPS) and port 443. OpenSSL is already in the image from `wpad-openssl` so this adds only the ustream TLS glue and the `openssl` tool used for certificate generation. Replaces `libustream-mbedtls` as the ustream TLS backend.
 
 **Main profile only:**
+
 - `samba4-server` + `luci-app-samba4` - SMB file sharing; compatible with Windows, macOS, iOS, and Android.
 - `luci-app-statistics` + `collectd-mod-{cpu,load,memory,disk,interface,iwinfo,tcpconns,processes}` - system, storage, WiFi, and TCP connection metrics in LuCI. `collectd-mod-ping` is excluded - the device has no upstream internet connection and is a local-only AP.
 - `iperf3` - network throughput benchmarking; run `iperf3 -s` on device, `iperf3 -c bodybytes.local` from a client to measure WiFi throughput under load.
@@ -160,9 +163,11 @@ GPT partition 1 (`kernel`) holds the raw FIT image blob with no filesystem. `emm
 - `luci-app-nlbwmon` - per-client bandwidth tracking in LuCI.
 
 **Recovery profile only:**
+
 - `parted` - partitions a fresh eMMC before the first sysupgrade (see [flashing.md §5b](flashing.md#5b--first-install-from-nor-recovery)).
 
 **`90_defaults` UCI configuration** (first boot, board-gated):
+
 - System: `hostname=bodybytes`
 - WiFi: `ssid=Bodybytes`, `country=US`, `encryption=sae-mixed`, `key=bodybytes` (change via LuCI before use)
 - Network: fixed ULA prefix `fd13:37be:ef00::/48` ("1337beef") overriding OpenWrt's `ula_prefix=auto`. A fixed prefix is safe because bodybytes is an isolated AP - no other device will ever share this ULA space. `ip6assign=64` tells netifd to assign the first /64 of that prefix to `br-lan`; the router's address is always `fd13:37be:ef00::1`.
@@ -189,6 +194,7 @@ The `data` partition is mounted at `/mnt/data` via an explicit fstab entry writt
 **`platform_do_upgrade`** sets `CI_KERNPART="kernel"`, `CI_ROOTPART="rootfs"`, `CI_DATAPART="rootfs_data"`, resets the bootcount register with `devmem 0x1000006c 32 0xB0010000`, then calls `emmc_do_upgrade`. `0x1000006c` is the physical address of the MT7628 SYSCTL MEMO2 register; `0xB0010000` packs the magic sentinel `0xB001` in bits [31:16] and count `0` in bits [15:0] — the encoding U-Boot's `BOOTCOUNT_GENERIC`/`SINGLEWORD` backend expects. No NOR write occurs; the NOR env partition is fully read-only from Linux. `bootlimit=3` is permanently fixed in the compiled-in env and the NOR env partition.
 
 `emmc_do_upgrade` detects the sysupgrade-tar format and dispatches to `emmc_upgrade_tar`, which raw-writes each tar member via `dd`:
+
 - `sysupgrade-*/kernel` (the FIT image) → GPT partition labelled `kernel` (`CI_KERNPART`) - raw binary, no filesystem
 - `sysupgrade-*/root` (the squashfs) → GPT partition labelled `rootfs` (`CI_ROOTPART`) - raw binary, no filesystem
 
