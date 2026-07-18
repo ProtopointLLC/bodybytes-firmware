@@ -13,12 +13,14 @@ Usage:
 """
 
 import argparse
-import os
 import shutil
+import subprocess
 import sys
 
 from lib.config import BOARD_NAMES, load_board
-from lib.log import log
+from lib.log import log, ts
+
+READY_PATTERN = "Listening on port 4444 for telnet connections"
 
 
 def main() -> None:
@@ -53,7 +55,40 @@ def main() -> None:
         "-c", "wait_halt 5000",
     ]
 
-    os.execv(openocd, argv)
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    startup_ok = False
+    errors_seen = []
+    try:
+        for line in proc.stdout:
+            print(f"{ts()} [OpenOCD] {line.rstrip()}", flush=True)
+            if not startup_ok:
+                if READY_PATTERN in line:
+                    if errors_seen:
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                        log("OpenOCD: failed")
+                        sys.exit(1)
+                    log("OpenOCD: ready")
+                    startup_ok = True
+                elif line.startswith("Error:"):
+                    errors_seen.append(line.rstrip())
+    except KeyboardInterrupt:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        sys.exit(0)
+    finally:
+        proc.stdout.close()
+    proc.wait()
+    if not startup_ok:
+        log(f"OpenOCD: failed (exit {proc.returncode})")
+        sys.exit(proc.returncode if proc.returncode != 0 else 1)
+    sys.exit(proc.returncode)
 
 
 if __name__ == "__main__":

@@ -14,12 +14,15 @@ Usage:
 """
 
 import argparse
-import time
+
+import serial
 
 from lib.openocd import OpenOCD
-from lib.log import log, err, oc as _oc
+from lib.uboot import UBoot
+from lib.log import log, err, oc as _oc, ub as _ub
 from lib.config import (
     OPENOCD_HOST, OPENOCD_PORT,
+    SERIAL_PORT, SERIAL_BAUD,
     UBOOT_RAM_BIN, UBOOT_RAM_ADDR,
     CHIP_ID_ADDR, CHIP_ID_MAGIC, STAGING_ADDR,
     BOARD_NAMES, load_board,
@@ -74,8 +77,7 @@ def jtag_ram_boot(openocd: OpenOCD, dram_size_mb: int) -> None:
 
     _oc(openocd, f"reg pc {UBOOT_RAM_ADDR:#x}", timeout=5)
     _oc(openocd, "resume", timeout=5)
-    log(f"Resumed at {UBOOT_RAM_ADDR:#010x}, waiting 5 s for U-Boot prompt")
-    time.sleep(5)
+    log(f"U-Boot started at {UBOOT_RAM_ADDR:#010x}")
 
 
 def main():
@@ -104,7 +106,27 @@ def main():
     finally:
         openocd.close()
 
-    log("U-Boot is running  you can now run flash_nor_images.py")
+    log(f"Opening serial {SERIAL_PORT} @ {SERIAL_BAUD} baud")
+    try:
+        uboot = UBoot(SERIAL_PORT, SERIAL_BAUD)
+    except serial.SerialException as e:
+        err(f"Cannot open serial port: {e}")
+
+    try:
+        log("Interrupting autoboot via UART ...")
+        try:
+            uboot.interrupt_autoboot(timeout=10.0)
+        except TimeoutError as e:
+            err(str(e))
+        log("U-Boot shell ready")
+
+        out = _ub(uboot, "version", timeout=10)
+        if "U-Boot" not in out:
+            err(f"'version' did not return expected output:\n{out}")
+    finally:
+        uboot.close()
+
+    log("U-Boot is running at its shell")
 
 
 if __name__ == "__main__":

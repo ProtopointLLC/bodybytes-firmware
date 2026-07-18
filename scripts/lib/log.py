@@ -43,12 +43,13 @@ def oc(openocd: OpenOCD, cmd: str, timeout: float = 300) -> str:
     return out
 
 def ub(uboot: UBoot, cmd: str, timeout: float = SERIAL_TIMEOUT) -> str:
-    print(f"{ts()} [U-Boot] > {cmd}")
+    print(f"{ts()} [U-Boot] > {cmd}", flush=True)
+    def on_line(line: str) -> None:
+        clean = _printable(line)
+        if clean and clean != cmd:
+            print(f"{ts()} [U-Boot] < {clean}", flush=True)
     try:
-        out = uboot.cmd(cmd, timeout=timeout)
+        return uboot.cmd(cmd, timeout=timeout, on_line=on_line)
     except (TimeoutError, _serial.SerialException) as e:
         err(f"U-Boot: {e}")
-    for line in _lines(out, cmd):
-        print(f"{ts()} [U-Boot] < {line}")
-    return out
 
