@@ -12,7 +12,10 @@
                 "panel": "dedicated",
                 "clear": true
             },
-            "problemMatcher": ["$gcc"],
+            "problemMatcher": {
+                "base": "$gcc",
+                "fileLocation": ["autoDetect", "${workspaceFolder}/u-boot"]
+            },
             "group": {
                 "kind": "build",
                 "isDefault": true
@@ -21,7 +24,7 @@
         {
             "label": "OpenWrt: Setup",
             "type": "shell",
-            "command": "nix develop .#openwrt --command bash -c 'cd openwrt && ./scripts/feeds update -a && ./scripts/feeds install -a && cp ../bodybytes.config .config && make defconfig && make download'",
+            "command": "nix run .#openwrt -- -c 'cd openwrt && ./scripts/feeds update -a && ./scripts/feeds install -a && cp ../bodybytes.config .config && make defconfig && make download'",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",
@@ -32,7 +35,7 @@
         {
             "label": "OpenWrt: Download Packages",
             "type": "shell",
-            "command": "nix develop .#openwrt --command bash -c 'cd openwrt && cp ../bodybytes.config .config && make defconfig && make download'",
+            "command": "nix run .#openwrt -- -c 'cd openwrt && cp ../bodybytes.config .config && make defconfig && make download'",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",
@@ -43,13 +46,16 @@
         {
             "label": "OpenWrt: Build",
             "type": "shell",
-            "command": "nix develop .#openwrt --command bash -c 'cd openwrt && cp ../bodybytes.config .config && make defconfig && make V=s world -j$(nproc)'",
+            "command": "nix run .#openwrt -- -c 'cd openwrt && cp ../bodybytes.config .config && make defconfig && make V=s world -j$(nproc)'",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",
                 "clear": true
             },
-            "problemMatcher": ["$gcc"],
+            "problemMatcher": {
+                "base": "$gcc",
+                "fileLocation": ["autoDetect", "${workspaceFolder}/openwrt"]
+            },
             "group": {
                 "kind": "build",
                 "isDefault": true
@@ -74,14 +80,17 @@
         {
             "label": "JTAG: Start OpenOCD J-Link",
             "type": "shell",
-            "command": "nix develop .#uboot --command python3 scripts/start_openocd_jlink.py --vocore2",
+            "command": "nix develop .#uboot --command python3 scripts/start_openocd_jlink.py --${input:board}",
             "isBackground": true,
+            "runOptions": {
+                "instanceLimit": 1
+            },
             "problemMatcher": {
                 "pattern": { "regexp": "^$" },
                 "background": {
                     "activeOnStart": true,
-                    "beginsPattern": "Board\\s*:",
-                    "endsPattern": "Listening on port 4444"
+                    "endsPattern": ".*OpenOCD: failed|ready.*",
+                    "beginsPattern": ".*Open On-Chip Debugger.*",
                 }
             },
             "presentation": {
@@ -97,7 +106,7 @@
         {
             "label": "JTAG: Flash NOR",
             "type": "shell",
-            "command": "nix develop .#uboot --command python3 scripts/flash_nor_images.py --jtag --all",
+            "command": "nix develop .#uboot --command python3 scripts/flash_nor_images.py --jtag --all --${input:board} --mac ${input:mac}",
             "dependsOn": "JTAG: Start OpenOCD J-Link",
             "presentation": {
                 "reveal": "always",
@@ -113,7 +122,7 @@
         {
             "label": "JTAG: Boot U-Boot from RAM",
             "type": "shell",
-            "command": "nix develop .#uboot --command python3 scripts/boot_uboot_jtag.py",
+            "command": "nix develop .#uboot --command python3 scripts/boot_uboot_jtag.py --${input:board}",
             "dependsOn": "JTAG: Start OpenOCD J-Link",
             "presentation": {
                 "reveal": "always",
@@ -124,6 +133,21 @@
                 "kind": "test",
                 "isDefault": true
             }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "board",
+            "type": "pickString",
+            "description": "Select board",
+            "options": ["vocore2", "bodybytes"],
+            "default": "vocore2"
+        },
+        {
+            "id": "mac",
+            "type": "promptString",
+            "description": "WiFi MAC address (XX:XX:XX:XX:XX:XX)",
+            "default": "b8:d8:12:6c:d2:f4"
         }
     ]
 }

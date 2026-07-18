@@ -7,70 +7,81 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
-    in
-    {
-      devShells = forAllSystems (system:
+
+      mkPerSystem = system:
         let
           pkgs = import nixpkgs { inherit system; };
           crossPkgs = pkgs.pkgsCross.mipsel-linux-gnu;
-        in
-        {
 
-        # U-Boot build + JTAG/OpenOCD.
-        uboot = pkgs.mkShell {
-          shellHook = ''
-            export OPENOCD_SCRIPTS="$PWD/openocd"
-            export CROSS_COMPILE=mipsel-unknown-linux-gnu-
-            export ARCH=mips
-            unset SOURCE_DATE_EPOCH
-          '';
+          openwrtFHSEnv = pkgs.buildFHSEnv {
+            name = "openwrt";
 
-          buildInputs = with pkgs; [
-            picocom openocd flashrom
-            inetutils
-            crossPkgs.buildPackages.gcc
-            crossPkgs.buildPackages.binutils
-            gnumake bison flex bc dtc swig pkg-config
-            openssl openssl.dev gnutls gnutls.dev
-            ncurses ncurses.dev
-            (python3.withPackages (ps: with ps; [
-              pyelftools pycryptodome setuptools
-              pyserial pyfdt
-            ]))
-          ];
+            profile = ''
+              export AR=gcc-ar
+              export RANLIB=gcc-ranlib
+              export NM=gcc-nm
+              export FAKEROOTDONTTRYCHOWN=1
+              export NIX_CFLAGS_COMPILE="-I/usr/include"
+              export NIX_LDFLAGS="-L/usr/lib"
+              export NIX_HARDENING_ENABLE=""
+              export LD_LIBRARY_PATH="/usr/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+              unset SOURCE_DATE_EPOCH
+            '';
+
+            targetPkgs = pkgs: with pkgs; [
+              gcc gnumake bison flex gawk patch
+              diffutils findutils coreutils
+              git rsync wget unzip bzip2 gzip
+              perl
+              (python3.withPackages (ps: with ps; [ setuptools ]))
+              ncurses ncurses.dev
+              openssl openssl.dev zlib zlib.dev xz
+              gettext
+              file which pkg-config swig dtc bash
+              (lib.lowPrio gcc.cc)
+            ];
+          };
+
+        in {
+          devShells = {
+            # U-Boot build + JTAG/OpenOCD.
+            uboot = pkgs.mkShell {
+              shellHook = ''
+                export OPENOCD_SCRIPTS="$PWD/openocd"
+                export CROSS_COMPILE=mipsel-unknown-linux-gnu-
+                export ARCH=mips
+                unset SOURCE_DATE_EPOCH
+              '';
+
+              buildInputs = with pkgs; [
+                picocom openocd flashrom
+                inetutils
+                crossPkgs.buildPackages.gcc
+                crossPkgs.buildPackages.binutils
+                gnumake bison flex bc dtc swig pkg-config
+                openssl openssl.dev gnutls gnutls.dev
+                ncurses ncurses.dev
+                (python3.withPackages (ps: with ps; [
+                  pyelftools pycryptodome setuptools
+                  pyserial pyfdt
+                ]))
+              ];
+            };
+
+            # OpenWrt host build shell (interactive use).
+            openwrt = openwrtFHSEnv.env;
+          };
+
+          packages = {
+            # OpenWrt FHS env wrapper — use with: nix run .#openwrt -- bash -c '...'
+            openwrt = openwrtFHSEnv;
+          };
         };
 
-        # OpenWRT host build shell.
-        openwrt = (pkgs.buildFHSEnv {
-          name = "openwrt";
+      perSystem = forAllSystems mkPerSystem;
 
-          profile = ''
-            export AR=gcc-ar
-            export RANLIB=gcc-ranlib
-            export NM=gcc-nm
-            export FAKEROOTDONTTRYCHOWN=1
-            export NIX_CFLAGS_COMPILE="-I/usr/include"
-            export NIX_LDFLAGS="-L/usr/lib"
-            export NIX_HARDENING_ENABLE=""
-            export LD_LIBRARY_PATH="/usr/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-            unset SOURCE_DATE_EPOCH
-          '';
-
-          targetPkgs = pkgs: with pkgs; [
-            gcc gnumake bison flex gawk patch
-            diffutils findutils coreutils
-            git rsync wget unzip bzip2 gzip
-            perl
-            (python3.withPackages (ps: with ps; [ setuptools ]))
-            ncurses ncurses.dev
-            openssl openssl.dev zlib zlib.dev xz
-            gettext
-            file which pkg-config swig dtc bash
-            (lib.lowPrio gcc.cc)
-          ];
-        }).env;
-
-        });
-
+    in {
+      devShells = nixpkgs.lib.mapAttrs (_system: s: s.devShells) perSystem;
+      packages = nixpkgs.lib.mapAttrs (_system: s: s.packages) perSystem;
     };
 }
