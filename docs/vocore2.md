@@ -98,8 +98,8 @@ cpu_pll_init
 adapter speed 1000
 dram_init 128
 mt7628.cpu0 configure -work-area-phys 0xa0001000 -work-area-size 4096 -work-area-backup 0
-mww 0xa0000000 0xdeadbeef
-mdw 0xa0000000
+mww 0x81000000 0xdeadbeef
+mdw 0x81000000
 ```
 
 All other steps (PLL init, work area, verify) are identical to [jtag.md §2](jtag.md#step-2--bootstrap-pll-and-dram).
@@ -109,10 +109,10 @@ All other steps (PLL init, work area, verify) are identical to [jtag.md §2](jta
 Once OpenOCD is running and listening on port 4444, run the full init + U-Boot load sequence in one shot:
 
 ```sh
-scripts/boot_uboot_jtag.py
+scripts/boot_uboot_jtag.py --vocore2
 ```
 
-This automates PLL init, `dram_init` (size from `[jtag]->dram_size_mb` in `scripts/config.ini`, default 128 MB - correct for VoCore2), DRAM test, and loading [`u-boot/u-boot.bin`](../u-boot/u-boot.bin) to `0x80200000` via JTAG. U-Boot output appears on the serial adapter connected to P2TP/P2TN.
+This automates PLL init, `dram_init` (size from `dram_size_mb` in `[board:vocore2]` in `scripts/config.ini` — 128 MB), DRAM test, and loading [`u-boot/u-boot.bin`](../u-boot/u-boot.bin) to `0x80200000` via JTAG. U-Boot output appears on the serial adapter connected to P2TP/P2TN.
 
 ---
 
@@ -170,7 +170,7 @@ Both use the legacy 4-bit data interface (SD\_D0–D3). 8-bit eMMC mode is not u
 
 The microSD breakout must expose all four data lines (D0–D3), CMD, and CLK - a **4-bit SDIO-capable** breakout is required. SPI-only breakouts (which expose only D0/MISO, CLK, CMD/MOSI, CS) will not work. The Adafruit 4682 exposes the full SDIO bus and is the tested choice.
 
-The Hardkernel reader board has a small pull-up resistor **R1** on RST\_n. RST\_n is tapped from the R1 pads with a bridge wire and connected to MDI\_TN\_P1 (GPIO#15) on the breakout, giving full pin parity with the bodybytes hardware setup. See [openwrt.md](openwrt.md) for the DTS `emmc_pwrseq` node discussion.
+The Hardkernel reader board has a small pull-up resistor **R1** on RST\_n. RST\_n is tapped from the R1 pads with a bridge wire and connected to MDI\_TN\_P1 (GPIO#15) on the breakout, giving full pin parity with the bodybytes hardware setup. GPIO#15 is made driveable by the `state_default` pinctrl state (see [openwrt.md §Pin control](openwrt.md#pin-control---pinctrl)); no power-sequencer node is present in the DTS.
 
 ### eMMC manufacturing from PC
 
@@ -202,9 +202,30 @@ Partition 1 holds the raw kernel binary; partition 2 holds the squashfs rootfs (
 
 ## NOR Flash
 
-VoCore2 uses a Winbond W25Q256FV: 32 MB total, 256-byte page size, 64 KB erase block size. The 64 KB block size matches `CONFIG_ENV_SECT_SIZE=0x10000` exactly - U-Boot's `saveenv` erases one block, and `fw_setenv` issues an erase ioctl for `secsize=0x10000`; both are correct for this chip. The partition offsets (u-boot at `0x0`, u-boot-env at `0x40000`, factory at `0x50000`, recovery at `0x60000`) are identical to bodybytes; only the total NOR size and the recovery partition end differ. Set `total_size_mb = 32` and `chip_name = W25Q256FV` in `scripts/config.ini` before using any NOR scripts on VoCore2 - `flash_nor_images.py --file` then produces a 32 MB image with the recovery partition capped at `0x1FA0000` (31.625 MB) instead of 63.625 MB. The actual recovery kernel is far smaller than either limit.
+VoCore2 uses a Winbond W25Q256FV: 32 MB total, 256-byte page size, 64 KB erase block size. The 64 KB block size matches `CONFIG_ENV_SECT_SIZE=0x10000` exactly - U-Boot's `saveenv` erases one block, and `fw_setenv` issues an erase ioctl for `secsize=0x10000`; both are correct for this chip. The partition offsets (u-boot at `0x0`, u-boot-env at `0x40000`, factory at `0x50000`, recovery at `0x60000`) are identical to bodybytes; only the total NOR size and the recovery partition end differ. The board profile `[board:vocore2]` in `scripts/config.ini` has `nor_total_size_mb = 32` and `nor_chip_name = W25Q256FV` — `flash_nor_images.py --vocore2 --file` then produces a 32 MB image with the recovery partition capped at `0x1FA0000` (31.625 MB) instead of 63.625 MB. The actual recovery kernel is far smaller than either limit.
 
-The recovery boot path (`altbootcmd=run bootcmd_recovery`) copies the kernel to RAM via `sf read` before booting - see §SPI Addressing Mode below for why direct XIP boot (`bootm 0xBC060000`) is unreliable and is not used.
+### Factory EEPROM comparison
+
+The VoCore2 factory partition is at NOR offset `0x40000` (bodybytes uses `0x50000`). VoCore2 has RF calibration burned from factory testing; bodybytes zeroes those fields and relies on the on-chip eFuse via `mediatek,eeprom-merge-otp`. This confirmed the field layout used for the bodybytes factory blob:
+
+| Offset | VoCore2 value | Bodybytes value | Note |
+|--------|---------------|-----------------|------|
+| `0x000` | `28 76` | `28 76` | Chip ID `0x7628` LE — format matches |
+| `0x004` | `b8:d8:12:6c:d2:f4` | your MAC | WiFi MAC |
+| `0x028` | `b8:d8:12:6c:d2:f5` | `00` | Ethernet MAC+1 — bodybytes has no ethernet |
+| `0x02e` | `b8:d8:12:6c:d2:f7` | `00` | AP/STA second MAC — unused |
+| `0x034` | `11 34` (`NIC_CONF_0`) | `00` | External PA/LNA config; zero = integrated PA, correct for MT7628AN |
+| `0x050`–`0x145` | RF cal data | `00` | Merged from eFuse at boot via `eeprom-merge-otp` |
+
+To dump the VoCore2 factory partition via JTAG (NOR at KSEG1 `0xBC000000`):
+
+```tcl
+dump_image build/vocore2_factory.bin 0xBC040000 0x10000
+```
+
+`md.b 0xBC040000 10` in a U-Boot console confirms `28 76` in the first two bytes (chip ID `0x7628` LE).
+
+The recovery boot path (`altbootcmd` → `run boot_sf` → `fit_load_sf`) copies the kernel to RAM via `sf read` before booting - see §SPI Addressing Mode below for why direct XIP boot (`bootm 0xBC060000`) is unreliable and is not used.
 
 ### SPI Addressing Mode - CHIP_MODE Strapping
 
@@ -214,13 +235,7 @@ The MT7628AN latches `CHIP_MODE[2:0]` from `{SPI_CS1, SPI_CLK, SPI_MOSI}` at res
 
 **Bodybytes strapping**: `SPI_CS1` = high, `SPI_CLK` = high, `SPI_MOSI` = floating. MOSI is wired directly to the W25Q512JV SI pin, which is high-impedance when CS is deasserted, so `CHIP_MODE[0]` at reset is determined only by PCB pull resistors. In practice the effective mode is also 3-byte, giving the same 16 MB XIP window - but the bodybytes chip is a W25Q512JV (64 MB), so any recovery image larger than ~15.6 MB would read garbage via XIP. The floating strapping is a hardware design issue; a future board revision should add an explicit pull resistor to lock `CHIP_MODE[0]` to a known state.
 
-**The fix**: never boot from the XIP window directly. `bootcmd_recovery` copies to RAM first:
-
-```
-sf probe && sf read ${kernel_addr_r} 0x60000 ${recovery_size} && bootm ${kernel_addr_r}
-```
-
-`sf probe` triggers EN4B (command `0xB7`) on the W25Q512JV, switching it to 4-byte mode. `sf read` then uses the SPI driver - not the XIP window - and can access the full 64 MB correctly.
+**The fix**: never boot from the XIP window directly. `boot_sf` → `fit_load_sf` copies the kernel to RAM first: `sf probe` triggers EN4B (command `0xB7`), switching the flash to 4-byte mode; `fit_load_sf` then uses the SPI driver — not the XIP window — doing a two-pass read (one block for the FIT header to determine image size, then the full image into `${dram_staging}`). See [flashing.md §6b](flashing.md#6b---bootcmd) for the full env variable reference.
 
 **OpenWRT MTD note:** The OpenWRT DTS defines the `recovery` partition with size `0x3FA0000` (63.625 MB), which extends to the 64 MB boundary. On VoCore2 the kernel spi-nor driver detects the W25Q256 as 32 MB, so the MTD layer rejects or truncates the `recovery` partition with a warning. The `u-boot`, `u-boot-env`, and `factory` partitions (all within the first 384 KB) register correctly. The truncated `recovery` MTD is harmless in practice: OpenWRT never writes to it (it is `read-only` in the DTS and is only ever written by U-Boot via `sf`), and `fw_setenv`/`fw_printenv` use `u-boot-env` which is unaffected.
 
@@ -228,25 +243,21 @@ sf probe && sf read ${kernel_addr_r} 0x60000 ${recovery_size} && bootm ${kernel_
 
 **Before making any changes, dump the stock NOR** (see §Dumping the stock NOR image below) so you can restore VoCore2 to its original state afterwards.
 
-**1 - Set config for VoCore2** (if not already done):
-
-In `scripts/config.ini` set `total_size_mb = 32` and `chip_name = W25Q256FV` in `[nor]`.
-
-**2 - Build the NOR image:**
+**1 - Build the NOR image:**
 
 ```sh
-scripts/flash_nor_images.py --file --mac XX:XX:XX:XX:XX:XX
+scripts/flash_nor_images.py --vocore2 --file --mac XX:XX:XX:XX:XX:XX
 ```
 
 Output: `build/bodybytes_nor_image.bin` (32 MB). The u-boot-env and factory blobs are generated on the fly.
 
-**3 - Flash to NOR:**
+**2 - Flash to NOR:**
 
 Via JTAG (U-Boot already RAM-booted, serial port connected):
 
 ```sh
-scripts/flash_nor_images.py --full-erase   # erase entire chip first
-scripts/flash_nor_images.py --all          # then write all partitions
+scripts/flash_nor_images.py --vocore2 --full-erase   # erase entire chip first
+scripts/flash_nor_images.py --vocore2 --all --mac XX:XX:XX:XX:XX:XX  # then write all partitions
 ```
 
 Or via CH341A SPI programmer (board powered off):
@@ -255,20 +266,20 @@ Or via CH341A SPI programmer (board powered off):
 flashrom -p ch341a_spi -c W25Q256FV --force -w build/bodybytes_nor_image.bin
 ```
 
-**4 - Test recovery:**
+**3 - Test recovery:**
 
-Trigger recovery by simulating a bootcount overflow (or hold the recovery button during reset):
+The simplest method is to hold the recovery button during power-on — U-Boot detects GPIO#14 low and runs `boot_sf` directly.
+
+To test the bootcount-overflow path instead, interrupt autoboot at the U-Boot prompt after JTAG boot, then write the SYSCTL MEMO2 register to encode bootcount=4 (> bootlimit=3) and reset:
 
 ```
-fw_setenv upgrade_available 1
-fw_setenv bootcount 4
-fw_setenv bootlimit 3
+mw 0xb000006c 0xb0010004
 reset
 ```
 
-U-Boot will run `altbootcmd` → `sf probe && sf read ${kernel_addr_r} 0x60000 ${recovery_size} && bootm ${kernel_addr_r}` and boot the recovery initramfs from NOR.
+U-Boot reads MEMO2 on the next boot, sees bootcount (4) > bootlimit (3), and runs `altbootcmd` → `run boot_sf` → `fit_load_sf`, booting the recovery initramfs from NOR.
 
-**5 - Restore stock NOR** when done (see §Restoring the stock NOR image below).
+**4 - Restore stock NOR** when done (see §Restoring the stock NOR image below).
 
 For JTAG RAM-boot development that does not exercise the recovery path, NOR is not involved - `u-boot.bin` is loaded directly to RAM.
 
@@ -282,7 +293,7 @@ The procedure below dumps the stock VoCore2 NOR to `build/vocore2_nor_backup.bin
 
 ```sh
 scripts/start_openocd_jlink.py --vocore2
-scripts/boot_uboot_jtag.py
+scripts/boot_uboot_jtag.py --vocore2
 ```
 
 **2 - Read full NOR into RAM:**
@@ -352,6 +363,59 @@ The write command erases each 64 KB block before programming and verifies the re
 
 ---
 
+## WiFi EEPROM calibration
+
+The VoCore2 stock firmware ships the module as 1T1R (`NIC_CONFG_0 = 0x11`): WF0 drives the on-board ceramic SMT antenna, WF1 goes to a U.FL connector. The bodybytes firmware uses the same 1T1R setting since VoCore2 is used as a development proxy — if you want 2T2R for range testing, apply the vendor `ant2.sh` patch which changes byte[0] to `0x22` without touching any other calibration field. TSSI temperature compensation (`NIC_CONFG_1 bit13`) is enabled because VoCore2 has a fully factory-calibrated chip with a known-good `TX0_POWER` ceiling of 30 dBm at 54 Mbps; the TSSI loop keeps output stable as the module heats up. Per-channel flatness offsets (CH1–5 / CH6–10 / CH11–14) and per-rate back-offs are set from the NOR backup and taper the higher OFDM and HT rates to 0 dBm relative to the TX0_POWER baseline. Crystal calibration uses `XTAL_TRIM2 = 0x8E` (+14 cap steps), a VoCore2 PCB-specific re-trim on top of the eFuse `XTAL_CAL` value the driver loads at every probe. The four eFuse-placeholder fields (`TEMP_SEN_CAL`, `efuse_cp_ft_version`, `XTAL_CAL`, `efuse_xtal_wf_rfcal`) are not written to the NOR image — the driver unconditionally overwrites them from on-chip OTP at probe time regardless of the NOR value, so setting them is redundant. The undocumented MCU blobs (`eeprom_0xf8`, `eeprom_0x12e`, `eeprom_0xe0`, `eeprom_0x130`, `eeprom_0x144`) are observed in the NOR dump but their purpose is unknown; they are omitted from the build until their function is confirmed.
+
+See [wifi.md §Register map](wifi.md#register-map) for full register details (offset, width, type, DS, eFuse, MCU columns) and the bodybytes configuration profile.
+
+Active values set in `[board:vocore2]` in `scripts/config.ini`:
+
+| `config.ini` key | VoCore2 | Notes |
+| ---------------- | -----: | ----- |
+| `wifi_nic_confg_0` | `11 34` | TX/RX path; byte[0] bits[7:4]=TX_PATH bits[3:0]=RX_PATH; `0x11`=1T1R; VoCore2 stock is 1T1R (WF0→ceramic antenna, WF1→U.FL); vendor `ant2.sh` patches to `0x22` for 2T2R |
+| `wifi_nic_confg_1` | `00 20` | TSSI_COMP[13], ANT_DIV_CTRL[12:11], BW_40M_2P4G[8] (0=enable 40M), WF0/1_AUX[2:3], TX_POWER[1], HW_RADIO[0]; `0x2000`=TSSI_COMP only |
+| `wifi_tx0_pa_tssi_msb` | `ca` | calibration-free; TX0_TSSI_OFST[11:4]; `0xCA`=MT7628 A/N, `0xC8`=MT7628K; reset `0xCC` is an uncalibrated placeholder |
+| `wifi_tx0_power` | `1e` | TX0 2.4G target power at 54 Mbps (dBm); base for `mt7603_init_txpower()`; VoCore2 reduced from 35 to 30 dBm |
+| `wifi_tx0_pwr_ofst_l` | `80` | bit[7]=EN, bit[6]=INC, bits[5:0]=delta; TX0 CH1–5; `0x80`={EN=1,INC=0,OFST=0}=0 dBm; reset EN=0 (disabled) |
+| `wifi_tx0_pwr_ofst_m` | `c0` | TX0 CH6–10; `0xC0`={EN=1,INC=1,OFST=0}=0 dBm |
+| `wifi_tx0_pwr_ofst_h` | `c0` | TX0 CH11–14; 0 dBm |
+| `wifi_tx1_pa_tssi_msb` | `ca` | calibration-free; TX1_TSSI_OFST[11:4]; `0xCA`=MT7628 A/N |
+| `wifi_tx1_power` | `1e` | TX1 2.4G target power at 54 Mbps (dBm) |
+| `wifi_tx1_pwr_ofst_l` | `81` | TX1 CH1–5; `0x81`={EN=1,INC=0,OFST=1}=−0.5 dBm; per-chain PCB asymmetry |
+| `wifi_tx1_pwr_ofst_m` | `c0` | TX1 CH6–10; 0 dBm |
+| `wifi_tx1_pwr_ofst_h` | `c1` | TX1 CH11–14; `0xC1`={EN=1,INC=1,OFST=1}=+0.5 dBm; compensates roll-off |
+| `wifi_tx_pwr_ofdm_0` | `c4` | OFDM 6M/9M power offset; `0xC4`={EN=1,INC=1,delta=4}=+2 dBm vs TX0_POWER |
+| `wifi_tx_pwr_ofdm_1` | `c4` | OFDM 12M/18M power offset; +2 dBm |
+| `wifi_tx_pwr_ofdm_2` | `c4` | OFDM 24M/36M power offset; +2 dBm |
+| `wifi_tx_pwr_ofdm_3` | `c0` | OFDM 48M power offset; `0xC0`={EN=1,INC=1,delta=0}=0 dBm |
+| `wifi_tx_pwr_ofdm_4` | `c0` | OFDM 54M power offset; 0 dBm |
+| `wifi_tx_pwr_ht_mcs_0` | `c4` | HT MCS=0/8 power offset; +2 dBm |
+| `wifi_tx_pwr_ht_mcs_1` | `c4` | HT MCS=32 power offset (40 MHz duplicate spatial stream); +2 dBm |
+| `wifi_tx_pwr_ht_mcs_2` | `c4` | HT MCS=1,2/9,10 power offset; +2 dBm |
+| `wifi_tx_pwr_ht_mcs_3` | `c4` | HT MCS=3,4/11,12 power offset; +2 dBm |
+| `wifi_tx_pwr_ht_mcs_4` | `c4` | HT MCS=5/13 power offset; +2 dBm |
+| `wifi_tx_pwr_ht_mcs_5` | `c0` | HT MCS=6/14 power offset; 0 dBm |
+| `wifi_tx_pwr_ht_mcs_6` | `c0` | HT MCS=7/15 power offset; 0 dBm; end of 14-byte rate block |
+| `wifi_xtal_trim2` | `8e` | bit[7]=EN, bit[6]=DEC (0=increase), bits[5:0]=delta; `0x8E`={EN=1,DEC=0,delta=14}; +14 cap steps on top of XTAL_CAL |
+| `wifi_xtal_trim3` | `80` | `0x80`={EN=1,DEC=0,delta=0}; armed but zero delta — reserved for second correction pass; final_cap=OTP±trim2±trim3 |
+
+Additional values observed in the VoCore2 NOR dump but not included in the build. Documented for completeness:
+
+| `config.ini` key | VoCore2 | Notes |
+| ---------------- | -----: | ----- |
+| `wifi_temp_sen_cal` | `b6` | TEMP_COMP_EN, THADC_SLOP; eFuse-merged at probe — NOR value is a placeholder |
+| `wifi_efuse_cp_ft_version` | `02` | Chip-probe/final-test revision = 2; eFuse-merged at probe — NOR value is a placeholder |
+| `wifi_xtal_cal` | `bc` | bit[7]=XTAL_CAP_VLD, bits[6:0]=XTAL_CAP; `0xBC`={VLD=1,CAP=60} vs reset CAP=64; lower cap pulls frequency higher; eFuse-merged at probe — NOR value is a placeholder |
+| `wifi_efuse_xtal_wf_rfcal` | `88` | WiFi RF calibration word programmed at MTK factory test; eFuse-merged at probe — NOR value is a placeholder |
+| `wifi_eeprom_0xf8` | `0a 00` | 16-bit LE = 10; MCU WORD; purpose unknown |
+| `wifi_eeprom_0x12e` | `77 00` | 16-bit LE = 119 (`0x77`); byte[0] forwarded to MCU; byte[1] host-driver only; purpose unknown |
+| `wifi_eeprom_0xe0` | `11 1d 11 1d 1c 35 1c 35 1e 35 1e 35 17 19 17 19` | 8 LE WORDs in 4 duplicate pairs `(0x1D11, 0x351C, 0x351E, 0x1917)`; structure suggests 4 channel-group table × 2 chains; purpose unconfirmed |
+| `wifi_eeprom_0x130` | `11 1d 11 1d 15 7f 15 7f 17 7f 17 7f 10 3b 10 3b` | 8 WORDs `(0x1D11, 0x1D11, 0x7F15, 0x7F15, 0x7F17, 0x7F17, 0x3B10, 0x3B10)`; `0x7F` bytes suggest saturation markers; likely second channel-group power table; similar structure to *eeprom_0xe0* |
+| `wifi_eeprom_0x144` | `11 00` | 16-bit LE = 17 (`0x11`); host-driver only; purpose unknown |
+
+---
+
 ## References
 
 - <https://vocore.io/v2.html> - VoCore2 pinout and hardware documentation
@@ -359,5 +423,8 @@ The write command erases each 64 KB block before programming and verifies the re
 - <https://www.hardkernel.com/shop/32gb-emmc-module-h2/> - Hardkernel 32 GB eMMC module (H2)
 - <https://www.hardkernel.com/shop/emmc-module-reader-board-for-os-upgrade/> - Hardkernel eMMC Module Reader Board (microSD adapter)
 - <https://www.adafruit.com/product/4682> - Adafruit 4682 SDIO microSD breakout
-- [jtag.md](jtag.md) - bodybytes JTAG procedure (use `dram_init 128` and VoCore2 reset\_config when adapting for VoCore2)
-- [uboot.md](uboot.md) - U-Boot DTS details including UART2 pin routing and EPHY pad mode; [openwrt.md](openwrt.md) - OpenWrt DTS details
+- [jtag.md](jtag.md) - bodybytes JTAG procedure; pass `--vocore2` to all scripts when using VoCore2
+- [uboot.md](uboot.md) - U-Boot defconfig and board file details
+- [openwrt.md](openwrt.md) - OpenWrt DTS and board profile details
+- [flashing.md](flashing.md) - NOR partition map, eMMC GPT layout, and boot sequence reference
+- [wifi.md](wifi.md) - WiFi EEPROM register map and bodybytes calibration profile

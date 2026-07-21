@@ -14,13 +14,16 @@ All files below live in the `openwrt/` submodule; the submodule is pinned to a c
 
 | File | Purpose |
 |------|---------|
-| [`openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dtsi`](../openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dtsi) | Device tree (shared by both profiles) - thin `.dts` wrappers [`openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dts`](../openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dts) and [`openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes_recovery.dts`](../openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes_recovery.dts) include it |
+| [`openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dtsi`](../openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dtsi) | Device tree (shared by both profiles); thin `.dts` wrappers [`openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dts`](../openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dts) and [`openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes_recovery.dts`](../openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes_recovery.dts) include it. The main `.dts` overrides `chosen.bootargs` to add `root=/dev/mmcblk0p2 rootwait`; the recovery `.dts` uses the DTSI bootargs as-is. |
 | [`openwrt/target/linux/ramips/image/mt76x8.mk`](../openwrt/target/linux/ramips/image/mt76x8.mk) | Board profile: `DEVICE_DTS`, `KERNEL` (FIT image pipeline), `DEVICE_PACKAGES` (includes `parted` for first-install partitioning from recovery), `IMAGE_SIZE`, `IMAGES`, `sysupgrade.bin` and `recovery.bin` build rules, `SUPPORTED_DEVICES` |
-| [`openwrt/target/linux/ramips/mt76x8/base-files/etc/uci-defaults/90_defaults`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/uci-defaults/90_defaults) | First-boot board defaults: hostname; WiFi SSID, country, WPA3-mixed encryption (`sae-mixed`, key `bodybytes`); full LAN setup (br-lan bridge, 192.168.1.1/24, ip6assign=64, ULA prefix); DHCPv6+RA; two-cert TLS PKI for uhttpd and ttyd; fstab mount for `data` partition at `/mnt/data`; Samba description and `/mnt/data` share (guarded on `/etc/config/samba4`); collectd disk/tcpconns/processes enables and RRD path `/srv/collectd/rrd` (guarded on `/etc/config/luci_statistics`) |
+| [`openwrt/target/linux/ramips/mt76x8/base-files/etc/uci-defaults/90_defaults`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/uci-defaults/90_defaults) | First-boot board defaults: root password (`bodybytes`); hostname; syslog to `/dev/console`; WiFi SSID, country, WPA3-mixed encryption (`sae-mixed`, key `bodybytes`); full LAN setup (br-lan bridge, 192.168.1.1/24, ip6assign=64, ULA prefix); DHCPv6+RA; two-cert TLS PKI for uhttpd and ttyd (with IPv6 enabled); fstab mount for `data` partition at `/mnt/data`; Samba description, `/mnt/data` share, and `bodybytes` system user (guarded on `/etc/config/samba4`); collectd disk/tcpconns/processes enables and RRD path `/srv/collectd/rrd` (guarded on `/etc/config/luci_statistics`) |
 | [`openwrt/target/linux/ramips/mt76x8/base-files/etc/board.d/02_network`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/board.d/02_network) | Network board detection. `ramips_setup_interfaces`: bodybytes case calls `ucidef_set_interface "lan" protocol "static"`, writing `network.lan = { protocol: "static" }` (no `device` field) to `/etc/board.json`. This suppresses the `99-default_network` fallback that would otherwise write `eth0` as the LAN device; it also prevents LuCI's port-status widget from showing a phantom eth0 entry (the widget reads `board.json`'s `device` field, which is absent). Because `board.json` has no `device` field for lan, `config_generate` skips LAN bridge creation; `90_defaults` builds it from scratch. `ramips_setup_macs`: bodybytes case reads the WiFi MAC from the factory NOR partition (offset 0x4) and sets it as `label_mac`, exposed as the device label MAC in LuCI. |
 | [`openwrt/package/boot/uboot-tools/uboot-envtools/files/ramips`](../openwrt/package/boot/uboot-tools/uboot-envtools/files/ramips) | U-Boot env tool config; the `bodybytes,bodybytes` case calls `ubootenv_add_mtd "u-boot-env" "0x0" "0x1000" "0x10000"`, which resolves the `u-boot-env` MTD partition by name at runtime and writes the resulting `/dev/mtdN` path into `/etc/fw_env.config` |
 | [`openwrt/target/linux/ramips/mt76x8/base-files/etc/init.d/bootcount`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/init.d/bootcount) | Resets the SYSCTL MEMO2 bootcount register to zero (`devmem 0x1000006c 32 0xB0010000`) on every successful boot (START=99) |
 | [`openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh`](../openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh) | Sysupgrade dispatch; `platform_check_image` rejects non-sysupgrade-tar images (no `CONTROL` entry) and fails if the `kernel` or `rootfs` GPT partitions are not yet present on the eMMC; bodybytes case sets `CI_KERNPART="kernel"`, `CI_ROOTPART="rootfs"`, `CI_DATAPART="rootfs_data"`, resets the SYSCTL MEMO2 bootcount register to zero via `devmem` (no NOR write), then calls `emmc_do_upgrade` to write the kernel to p1 and the squashfs rootfs to p2; `platform_copy_config` dispatches to `emmc_copy_config` to save the sysupgrade config backup into the `rootfs_data` partition |
+| [`openwrt/target/linux/ramips/mt76x8/base-files/etc/banner`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/banner) | Custom ASCII art banner shown at login: Bodybytes slant ASCII art, then `%D` (distro name, "OpenWrt"), `%V` (version), and `%C` (revision code). Build date is appended by `00-bodybytes.sh`. |
+| [`openwrt/target/linux/ramips/mt76x8/base-files/etc/profile.d/00-bodybytes.sh`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/profile.d/00-bodybytes.sh) | Login profile script: prints the kernel build date extracted from `uname -v` below the banner |
+| [`openwrt/target/linux/ramips/mt76x8/base-files/etc/profile.d/apk-cheatsheet.sh`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/profile.d/apk-cheatsheet.sh) | Login profile script: prints a one-line APK package manager hint if `apk` is available |
 
 ### What the DTS sets
 
@@ -30,7 +33,11 @@ Sets `compatible = "bodybytes,bodybytes", "mediatek,mt7628an-soc"` and `model = 
 
 #### Console
 
-`chosen.bootargs` is set to `"console=ttyS0,115200"`. UART2 becomes ttyS0 because `&uartlite` (UART0) is disabled in the DTS, so UART2 is the only registered serial device and gets ttyS0. UART2 is routed to EPHY MDI_P2 pads (MDI_TP_P2 / MDI_TN_P2, SoC pins 47/48): `uart2_pins` sets `UART2_MODE=0`; `ephy-digital` (see below) sets `AGPIO_CFG EPHY_GPIO_AIO_EN[4:1]=0xf` at pinctrl probe time, switching those pads from analog to digital mode.
+The DTSI sets `chosen.bootargs = "console=ttyS0,115200"`. UART2 gets ttyS0 because: `mt7628an.dtsi` defines `serial0 = &uartlite` but uartlite is disabled, so slot 0 in the 8250 port array is never claimed. UART2 has no serial alias, so the 8250 driver auto-assigns it to the first free slot (ttyS0). Both profiles use `console=ttyS0`.
+
+The main profile's `mt7628an_bodybytes_bodybytes.dts` wrapper overrides `chosen.bootargs` to `"console=ttyS0,115200 root=/dev/mmcblk0p2 rootwait"`, adding the eMMC root device. The recovery profile uses the DTSI bootargs verbatim (no root= needed — rootfs is in the initramfs).
+
+UART2 is routed to EPHY MDI_P2 pads (MDI_TP_P2 / MDI_TN_P2, SoC pins 47/48): `uart2_pins` sets `UART2_MODE=0`; `ephy-digital` (see below) sets `AGPIO_CFG EPHY_GPIO_AIO_EN[4:1]=0xf` at pinctrl probe time, switching those pads from analog to digital mode.
 
 #### SPI NOR flash - `&spi0`
 
@@ -39,7 +46,7 @@ W25Q512JV, 64 MB, CS0, 25 MHz. The OS lives on eMMC; NOR holds only the bootload
 | Partition | Offset | Size | Notes |
 |-----------|--------|------|-------|
 | `u-boot` | `0x000000` | 256 KB | read-only |
-| `u-boot-env` | `0x040000` | 64 KB | read-only; contains `bootlimit=3`, `altbootcmd`, and other boot variables; never written by OpenWrt |
+| `u-boot-env` | `0x040000` | 64 KB | read-only in the Linux DTS (U-Boot's own DTS omits `read-only` so `saveenv` works from U-Boot); contains `bootlimit=3`, `altbootcmd`, and other boot variables; readable via `fw_printenv`; never written by OpenWrt |
 | `factory` | `0x050000` | 64 KB | read-only; 1 KB WiFi EEPROM at offset 0 |
 | `recovery` | `0x060000` | 63.625 MB | read-only; OpenWrt initramfs kernel |
 
@@ -70,11 +77,7 @@ The normal path for updating NOR is via JTAG with [`scripts/flash_nor_images.py`
 
 Together these mirror what `sd_iot_mode` does in `bodybytes_uboot.dtsi`, routing the SDXC data/cmd/clk lines to EPHY P3/P4 MDI pads (SoC pins 51–57).
 
-**`state_default`** - the system-wide default pinctrl state (inherited placeholder from `mt7628an.dtsi`, populated by the bodybytes DTSI). Sets `GPIO_MODE SPIS = gpio`, switching MDI P1 pads to GPIO function. Applied at pinctrl init time, covering both consumers of MDI P1 GPIOs: the `emmc_pwrseq` GPIO#15 reset and the `gpio-keys` GPIO#14 boot-mode sensor. Applied early enough that neither driver races the mux.
-
-#### eMMC power sequencer
-
-A `mmc-pwrseq-emmc` node wired to `reset-gpios = <&gpio 15 GPIO_ACTIVE_LOW>`. MDI_TN_P1 (SoC pin 42, GPIO#15) is pulsed low at power-up by the `mmc-pwrseq-emmc` driver to clear fault conditions. The eMMC RST_n function is disabled by default (EXT_CSD[162] = 0x00) so pulsing is a safe no-op; if the OS later enables RST_n the pulse will perform a real reset on subsequent power-ups.
+**`state_default`** - the system-wide default pinctrl state (inherited placeholder from `mt7628an.dtsi`, populated by the bodybytes DTSI). Sets `GPIO_MODE SPIS = gpio`, switching MDI P1 pads to GPIO function. Applied at pinctrl init time, before `gpio-button-hotplug` claims GPIO#14 (the hall sensor) at probe. GPIO#15 (MDI_TN_P1, the eMMC RST_n line) is also made driveable by this state; no power-sequencer node is present in the current DTS.
 
 #### eMMC / microSD - `&sdhci`
 
@@ -88,7 +91,6 @@ Kingston EMMC128-IY29-5B111, 128 GB eMMC 5.1 (or microSD), on EPHY P3/P4 MDI pad
 | `no-1-8-v` | - | Prevents voltage-switch negotiation to 1.8 V; MT7628 SDXC runs at 3.3 V only |
 | `non-removable` | - | Card is always present; no CD polling needed |
 | `no-sdio` | - | Prevents SDIO (CMD5) probe; without this the MSDC driver sets `SDC_CFG_SDIO` in hardware and CMD5 causes "no support for card's volts" + CMD1 busy-poll timeout |
-| `mmc-pwrseq` | `emmc_pwrseq` | Links hardware reset GPIO (GPIO#15, MDI_TN_P1) |
 
 `cap-mmc-highspeed` and `bus-width = <4>` are inherited from `mt7628an.dtsi`. High Speed SDR mode (≤52 MHz, ≤52 MB/s) is the fastest mode the MT7628 SDXC controller supports at 3.3 V VCCQ; HS200/HS400 require 1.8 V and are unreachable regardless.
 
@@ -96,13 +98,13 @@ Kingston EMMC128-IY29-5B111, 128 GB eMMC 5.1 (or microSD), on EPHY P3/P4 MDI pad
 
 #### Boot mode selector - `keys`
 
-A `gpio-keys` node exposes a `boot-mode` button on `gpios = <&gpio 14 GPIO_ACTIVE_LOW>` with `linux,code = <BTN_0>`. MDI_TP_P1 (SoC pin 43, GPIO#14) is driven by a TI DRV5032FCDBZT hall-effect sensor — magnet present = low = pressed. U-Boot reads this GPIO at boot to choose normal vs. recovery boot.
+A `gpio-keys` node exposes a `boot-mode` button on `gpios = <&gpio 14 GPIO_ACTIVE_LOW>` with `linux,code = <BTN_0>`. MDI_TP_P1 (SoC pin 40, GPIO#14) is driven by a TI DRV5032FCDBZT hall-effect sensor — magnet present = low = pressed. U-Boot reads this GPIO at boot to choose normal vs. recovery boot.
 
 **`CONFIG_INPUT` is not set** in the bodybytes kernel config. There is no Linux input subsystem, no `/dev/input/`, and the standard `gpio-keys` input driver is not compiled. Instead, `kmod-gpio-button-hotplug` (from the mt76x8 `DEFAULT_PACKAGES`) registers a platform driver under the name `gpio-keys`, claiming the DTS node at module load time from `/etc/modules-boot.d/`. It fires uevent hotplug calls directly rather than creating input events. Hotplug scripts in `/etc/hotplug.d/button/` match on `[ "$BUTTON" = "BTN_0" ]` and `[ "$ACTION" = "pressed" ]` / `released`.
 
 The DTS `label = "boot-mode"` is used only as the GPIO consumer description visible in `/sys/kernel/debug/gpio`; it does not affect `BUTTON=`. To observe the current sensor state from a running system: `grep boot-mode /sys/kernel/debug/gpio` — the field reads `hi` (no magnet) or `lo` (magnet present, ACTIVE_LOW).
 
-GPIO#14 is on the same MDI P1 pad group as GPIO#15 (eMMC reset). The `state_default` pinctrl state (sets `SPIS_MODE=gpio`) covers both; it fires at pinctrl init time, before either `gpio-button-hotplug` or `mmc-pwrseq-emmc` probes. `gpio-button-hotplug` claims GPIO#14 at probe time, preventing accidental userspace re-export.
+GPIO#14 is on the same MDI P1 pad group as GPIO#15 (eMMC RST_n). The `state_default` pinctrl state (sets `SPIS_MODE=gpio`) covers both; it fires at pinctrl init time, before `gpio-button-hotplug` probes. `gpio-button-hotplug` claims GPIO#14 at probe time, preventing accidental userspace re-export.
 
 #### Ethernet - `&ethernet` / `&esw`
 
@@ -150,20 +152,24 @@ GPT partition 1 (`kernel`) holds the raw FIT image blob with no filesystem. `emm
 
 **`BODYBYTES_PACKAGES`** (both profiles):
 
+- `kmod-mmc-mtk` + `block-mount` + `kmod-fs-ext4` - kernel MMC driver, block device automount daemon, and ext4 filesystem support; required for eMMC operation.
+- `uboot-envtools` - provides `fw_printenv`/`fw_setenv`; `ubootenv_add_mtd` in `02_network` configures `/etc/fw_env.config` at runtime. `fw_printenv` is copied into the sysupgrade ramfs via `RAMFS_COPY_BIN`.
 - `openssh-sftp-server` + `rsync` - needed in recovery to transfer a sysupgrade image into the device before flashing.
 - `avahi-daemon` - advertises `bodybytes.local` via mDNS; useful in recovery where the user has no easy way to find the device IP.
 - `e2fsprogs` - `e2fsck`/`resize2fs`/`tune2fs` for ext4 maintenance on the data partition and for `mkfs.ext4` after `parted` creates partitions in recovery.
 - `lsblk` - inspects block device layout, partition labels, and mount points.
+- `dtc` - device tree compiler; included for on-device DTS/DTB debugging.
+- `iperf3` - network throughput benchmarking; run `iperf3 -s` on device, `iperf3 -c bodybytes.local` from a client to measure WiFi throughput under load.
 - `-wpad-basic-mbedtls wpad-openssl` - swaps the subtarget default for the full WPA supplicant/hostapd build with OpenSSL; required for WPA3 (SAE) and 802.11r. The MT7628AN mt76 driver sets `IEEE80211_HW_MFP_CAPABLE` via the shared mt76 framework (`mac80211.c:476`), confirming hardware 802.11w support.
 - `-swconfig` - removes the `swconfig` Ethernet switch configuration tool from the image. `swconfig` is in the mt76x8 subtarget `DEFAULT_PACKAGES` for the many mt76x8 boards that have an internal switch, but bodybytes disables both `&ethernet` and `&esw` in the DTS. The kernel driver never probes, so `swconfig` would find no switch to configure — it is dead weight.
 - `luci-ssl-openssl` - LuCI collection package that pulls in `luci-light`, `libustream-openssl`, and `openssl-util`. Enables HTTPS for the LuCI web interface; uhttpd listens on both port 80 (HTTP, redirects to HTTPS) and port 443. OpenSSL is already in the image from `wpad-openssl` so this adds only the ustream TLS glue and the `openssl` tool used for certificate generation. Replaces `libustream-mbedtls` as the ustream TLS backend.
+- `luci-app-ttyd` - web terminal in LuCI; provides browser-based shell access without SSH, critical once the device is implanted and serial is inaccessible. Included in both profiles so recovery also has a web terminal.
 
 **Main profile only:**
 
+- `travelmate` + `luci-app-travelmate` - WiFi roaming/uplink manager; allows the device to connect to an upstream WiFi network while simultaneously hosting its own AP.
 - `samba4-server` + `luci-app-samba4` - SMB file sharing; compatible with Windows, macOS, iOS, and Android.
-- `luci-app-statistics` + `collectd-mod-{cpu,load,memory,disk,interface,iwinfo,tcpconns,processes}` - system, storage, WiFi, and TCP connection metrics in LuCI. `collectd-mod-ping` is excluded - the device has no upstream internet connection and is a local-only AP.
-- `iperf3` - network throughput benchmarking; run `iperf3 -s` on device, `iperf3 -c bodybytes.local` from a client to measure WiFi throughput under load.
-- `luci-app-ttyd` - web terminal in LuCI; provides browser-based shell access without SSH, critical once the device is implanted and serial is inaccessible.
+- `luci-app-statistics` + `collectd-mod-{cpu,load,memory,disk,interface,iwinfo,tcpconns,processes}` - system, storage, WiFi, and TCP connection metrics in LuCI. `collectd-mod-ping` is excluded - upstream connectivity is not guaranteed (travelmate manages it opportunistically), so ping round-trip metrics would be meaningless or missing during periods without an upstream WiFi connection.
 - `luci-app-nlbwmon` - per-client bandwidth tracking in LuCI.
 
 **Recovery profile only:**
@@ -172,14 +178,16 @@ GPT partition 1 (`kernel`) holds the raw FIT image blob with no filesystem. `emm
 
 **`90_defaults` UCI configuration** (first boot, board-gated):
 
-- System: `hostname=bodybytes`
+- Root password: set to `bodybytes` via `passwd` (change before deployment).
+- System: `hostname=bodybytes`; `log_file=/dev/console` - routes syslog output to the UART serial port (ttyS0), making kernel and daemon log messages visible on the UART console during debugging.
 - WiFi: `ssid=Bodybytes`, `country=US`, `encryption=sae-mixed`, `key=bodybytes` (change via LuCI before use)
 - Network: `90_defaults` owns the entire LAN setup because `config_generate` skips it. `02_network` writes only `network.lan = { protocol: "static" }` to `board.json` (no `device` field) to suppress the `99-default_network` eth0 fallback and hide the phantom eth0 entry from LuCI's port-status widget. Because `board.json` carries no `device` field for lan, `generate_network()` returns early at its `[ -n "$device" -o -n "$ports" ] || return` guard. `90_defaults` therefore creates the full LAN from scratch: an anonymous bridge device named `br-lan` (no wired ports; WiFi attaches at runtime via hostapd), a `lan` interface bound to `br-lan` at `192.168.1.1/24`, `ip6assign=64`, and a fixed ULA prefix `fd13:37be:ef00::/48` ("1337beef") overriding `config_generate`'s `ula_prefix=auto`. A fixed prefix is safe because bodybytes is an isolated AP. `ip6assign=64` assigns the first /64 of that prefix to `br-lan`; the router's address is always `fd13:37be:ef00::1`.
 - DHCP/IPv6: `dhcpv6=server`, `ra=server`, `ra_slaac=1` on the LAN - odhcpd provides DHCPv6 and Router Advertisements with SLAAC so clients auto-configure their IPv6 addresses without explicit assignment.
+- Travelmate (main profile only, **uncommitted**): enables travelmate (`trm_enabled=1`), binds it to `radio0`, enables captive-portal detection (`trm_captive=1`), proactive uplink scanning (`trm_proactive=1`), and network reachability checks (`trm_netcheck=1`); creates a `trm_wwan` DHCP uplink interface (`proto=dhcp`, `metric=100`) and a `trm_wwan6` DHCPv6 uplink tied to it (`device=@trm_wwan`); adds both interfaces to the `wan` firewall zone (loop over `firewall.@zone[N]` matching `name=wan`); enables the travelmate init script (`/etc/init.d/travelmate enable`). This lets the main-profile device connect to an upstream WiFi network while simultaneously hosting its own AP.
 - TLS PKI: two-cert setup generated on first boot. A CA cert (`/etc/bodybytes-ca.crt`, `basicConstraints: CA:TRUE, pathlen:0`) signs a separate server cert (`/etc/uhttpd.crt`, `CA:FALSE`, SANs, `serverAuth`). Both are EC P-256, valid 50 years (18250 days). A clock guard (`[ "$(date +%Y)" -lt 2025 ] && date -s "2026-01-01 00:00:00"`) forces the clock forward on freshly-flashed devices with no valid RTC so the cert's `notBefore` field is sane. A single self-signed cert cannot work: Chrome/Firefox require the trust anchor to have `CA:TRUE` and the server cert to have `CA:FALSE` — they reject a cert that tries to be both. Users download the CA cert at `https://bodybytes.local/bodybytes-ca.crt` and install it once as a trusted CA; after that, all HTTPS connections to the device are trusted without warnings. The script restarts uhttpd to load the CA-signed cert. SANs: `DNS:bodybytes.local`, `DNS:bodybytes`, `IP:192.168.1.1`, `IP:fd13:37be:ef00::1`.
 - fstab: explicitly sets `delay_root=5` s; adds an explicit mount entry for the `data` partition at `/mnt/data` (`label=data`, `fstype=ext4`, `options=noatime`, `enabled=1`)
-- Samba (guarded on `/etc/config/samba4`): sets description to `Bodybytes`; adds a read-write guest share for `/mnt/data`. mDNS/Bonjour advertisement of `_smb._tcp` is handled by smbd itself via the avahi client library (`CONFIG_SAMBA4_SERVER_AVAHI=y`) - smbd registers with avahi-daemon over D-Bus when it starts and deregisters when it stops; no static service file is needed.
-- ttyd: enables TLS (`ssl=1`) and points ttyd at the uhttpd cert/key (`/etc/uhttpd.crt`, `/etc/uhttpd.key`). Required because LuCI is served over HTTPS and browsers block mixed-content WebSocket connections (`ws://` from an `https://` page); ttyd must use `wss://` with the same certificate.
+- Samba (guarded on `/etc/config/samba4`): sets description to `Bodybytes`; creates a `bodybytes` Linux system user (no shell, no home) and sets its Samba password via `smbpasswd`; adds a read-write authenticated share for `/mnt/data` (`valid_users=bodybytes`, `create_mask=0666`, `dir_mask=0777`). mDNS/Bonjour advertisement of `_smb._tcp` is handled by smbd itself via the avahi client library (`CONFIG_SAMBA4_SERVER_AVAHI=y`) - smbd registers with avahi-daemon over D-Bus when it starts and deregisters when it stops; no static service file is needed.
+- ttyd: enables TLS (`ssl=1`), IPv6 (`ipv6=1`), and points ttyd at the uhttpd cert/key (`/etc/uhttpd.crt`, `/etc/uhttpd.key`). TLS is required because LuCI is served over HTTPS and browsers block mixed-content WebSocket connections (`ws://` from an `https://` page); ttyd must use `wss://` with the same certificate. IPv6 enables ttyd to accept connections on both IPv4 and IPv6.
 - collectd (guarded on `/etc/config/luci_statistics`): enables `collectd_disk` (monitoring `mmcblk0`), `collectd_tcpconns` (ports 22 and 445, `AllPortsSummary=1`), `collectd_processes` (smbd, nmbd, dnsmasq, dropbear, uhttpd, avahi-daemon, collectd); sets RRD `DataDir` to `/srv/collectd/rrd` - persisted on `rootfs_data` via overlayfs, outside the Samba share. collectd creates the directory on first write.
 
 The `data` partition is mounted at `/mnt/data` via an explicit fstab entry written by `90_defaults` on first boot (`uci add fstab mount` with `label=data`, `target=/mnt/data`, `fstype=ext4`, `options=noatime`, `enabled=1`). The `block` daemon creates `/mnt/data` automatically at mount time. The `rootfs_data` overlay partition is handled by libfstools (matched by GPT label) independently.

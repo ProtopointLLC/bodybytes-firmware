@@ -71,12 +71,12 @@ nix develop .#uboot
 Start OpenOCD:
 
 ```sh
-scripts/start_openocd_jlink.py
+scripts/start_openocd_jlink.py --bodybytes
 ```
 
 `trst_only` - bodybytes has no PORST\_N on the JTAG connector. OpenOCD can reset the TAP (JTRST\_N) but not the SoC. Power the board first, then connect OpenOCD. `halt` sends a debug request to the running CPU rather than forcing it to a clean reset entry point.
 
-The script uses `reset_config trst_only`, issues `halt` after `init`, and waits up to 5 s for the CPU to halt. Ctrl-C terminates OpenOCD directly. Pass `--vocore2` when using a VoCore2 instead (see [vocore2.md §OpenOCD](vocore2.md#openocd)).
+The script reads `reset_config` and `halt_cmd` from the board profile in `scripts/config.ini` (`[board:bodybytes]`: `trst_only` / `halt`), issues the halt command after `init`, and waits up to 5 s for the CPU to halt. Ctrl-C terminates OpenOCD directly.
 
 Expected output:
 
@@ -128,20 +128,20 @@ Without PORST\_N, `halt` catches the CPU wherever it was executing - mid-U-Boot,
 With OpenOCD running and the CPU halted, run from the repo root (inside `nix develop .#uboot`):
 
 ```sh
-scripts/boot_uboot_jtag.py
+scripts/boot_uboot_jtag.py --bodybytes
 ```
 
 The script performs the full sequence automatically:
 
-1. Halts the CPU and verifies the PC is at the reset vector (`0x9c000000`)
-2. Reads `0x10000000` and confirms the MT7628 chip ID (`0x3637544d`)
+1. Halts the CPU and checks the PC against the reset vector (`0x9c000000`); logs a warning if it differs but continues
+2. Reads `0x10000000` and confirms the MT7628 chip ID (`0x3637544d`); aborts if it does not match
 3. Runs `cpu_pll_init` - locks the PLL to the 40 MHz crystal, sets CPU to 580 MHz
 4. Raises adapter speed to 1000 kHz
-5. Runs `dram_init` with the size from `[jtag]->dram_size_mb` in `scripts/config.ini`
+5. Runs `dram_init` with `dram_size_mb` from the board profile (`[board:bodybytes]` in `scripts/config.ini`)
 6. Configures the OpenOCD work area at `0xa0001000` for fast bulk transfers
-7. Writes and reads back `0xdeadbeef` at `[jtag]->dram_test_addr` to verify DRAM
-8. Loads `u-boot/u-boot.bin` to `[jtag]->uboot_ram_addr` via `load_image`
-9. Sets PC and resumes; waits 5 seconds for U-Boot to reach its prompt
+7. Writes and reads back `0xdeadbeef` at `staging_addr` (`0x81000000` from `[jtag]` in `scripts/config.ini`) to verify DRAM
+8. Loads `u-boot/u-boot.bin` to `uboot_ram_addr` (`0x80200000`) via `load_image`
+9. Sets PC to `0x80200000` and resumes; then opens serial (`/dev/ttyUSB0`), interrupts U-Boot autoboot, and confirms the prompt with `version`
 
 All steps are logged with timestamps. The script exits with an error if any step fails.
 
@@ -157,8 +157,8 @@ cpu_pll_init
 adapter speed 1000
 dram_init 256
 mt7628.cpu0 configure -work-area-phys 0xa0001000 -work-area-size 4096 -work-area-backup 0
-mww 0xa0000000 0xdeadbeef
-mdw 0xa0000000
+mww 0x81000000 0xdeadbeef
+mdw 0x81000000
 load_image u-boot/u-boot.bin 0x80200000 bin
 reg pc 0x80200000
 resume
@@ -176,12 +176,9 @@ Continue with [flashing.md §4b](flashing.md#4b--full-nor-programming-first-time
 
 ## Flash Map
 
-| Region | Interface | Size | Contents |
-|--------|-----------|------|----------|
-| SPI NOR | SPI bus 0 | 64 MB | U-Boot at 0x000000, env at 0x040000, WiFi EEPROM at 0x050000, recovery at 0x060000 |
-| eMMC | SDXC / MMC | 128 GB | 4-partition GPT: `kernel` (32 MB, raw), `rootfs` (512 MB, squashfs), `rootfs_data` (4 GB, ext4 overlay), `data` (remainder, ext4) - see [flashing.md §5a](flashing.md#5a--gpt-partition-layout) |
+See [flashing.md §1a](flashing.md#1a--partition-map) for the full NOR partition map and [flashing.md §5a](flashing.md#5a--gpt-partition-layout) for the eMMC GPT layout.
 
-SPI NOR is at physical `0x1c000000`, accessible to the CPU at `0x9c000000` (KSEG0 cached) or `0xbc000000` (KSEG1 uncached).
+SPI NOR is at physical `0x1c000000`, accessible to the CPU at `0x9c000000` (KSEG0 cached) or `0xbc000000` (KSEG1 uncached). Use `0xbc000000 + <nor_offset>` for direct JTAG memory reads (e.g. `mdw 0xbc050000 4` to read the first 16 bytes of the factory partition).
 
 ---
 

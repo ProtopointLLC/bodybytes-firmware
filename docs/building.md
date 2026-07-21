@@ -80,7 +80,7 @@ cp ../bodybytes.config .config
 make defconfig
 ```
 
-[`bodybytes.config`](../bodybytes.config) seeds the target/board selection and board-specific Kconfig options: `CONFIG_EMMC_SUPPORT=y` ensures `emmc.sh` is included in the base-files package; `CONFIG_SAMBA4_SERVER_AVAHI=y` builds samba4 with avahi client support so smbd registers `_smb._tcp` with avahi-daemon dynamically. `CONFIG_TARGET_MULTI_PROFILE=y` enables building both device profiles (`bodybytes_bodybytes` and `bodybytes_bodybytes_recovery`) in one pass - without it the device symbols are in a Kconfig `choice` and only the last one set is built. `make defconfig` expands the seed into a full `.config`. To add or change packages, run `make menuconfig` afterwards.
+[`bodybytes.config`](../bodybytes.config) seeds the target/board selection and board-specific Kconfig options. `CONFIG_TARGET_MULTI_PROFILE=y` is the critical build flag: without it the two device profiles (`bodybytes_bodybytes` and `bodybytes_bodybytes_recovery`) live in a Kconfig `choice` block and only the last one set is built. `make defconfig` expands the seed into a full `.config`. To add or change packages, run `make menuconfig` afterwards. See [openwrt.md §1](openwrt.md#1---board-files) for the full rationale behind each config symbol.
 
 ### Build
 
@@ -106,7 +106,7 @@ openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-initramfs-kernel.bin
 |-------|---------|---------|
 | [`openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin) | `bodybytes_bodybytes` | Sysupgrade tar (regular kernel + squashfs rootfs). Used for initial eMMC install and all OTA updates. |
 | [`openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-initramfs-kernel.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-initramfs-kernel.bin) | `bodybytes_bodybytes` | Initramfs kernel for the main profile; useful for RAM-boot testing without eMMC. |
-| [`openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin) | `bodybytes_bodybytes_recovery` | Initramfs kernel written to NOR `recovery` partition at `0x060000` by [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py), which also reads its size to derive `recovery_size` for the env partition. |
+| [`openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-squashfs-recovery.bin) | `bodybytes_bodybytes_recovery` | Initramfs kernel written to NOR `recovery` partition at `0x060000` by [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py). |
 | [`openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-initramfs-kernel.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-initramfs-kernel.bin) | `bodybytes_bodybytes_recovery` | Same content as `squashfs-recovery.bin`; intermediate build artifact. |
 
 ### VS Code tasks

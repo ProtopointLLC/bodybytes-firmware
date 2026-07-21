@@ -46,11 +46,16 @@ Reachable at `https://bodybytes.local`, `https://192.168.1.1`, or `https://fd13:
 
 `/mnt/data` (128 GB eMMC `data` partition) is shared read-write as a share named `data`.
 
+## Development with VoCore2
+
+The [VoCore2](https://vocore.io/v2.html) module uses the same MT7628AN SoC and can stand in as a lower-risk development board during U-Boot and OpenWrt bring-up. The bodybytes U-Boot and OpenWrt builds run on VoCore2 without modification; differences (128 MB RAM, 32 MB NOR, eMMC via adapter board, push-button recovery trigger) are handled by the `[board:vocore2]` profile in `scripts/config.ini`. See [docs/vocore2.md](docs/vocore2.md) for hardware differences, JTAG wiring, and WiFi calibration notes.
+
 ## Documentation
 
-- [docs/building.md](docs/building.md) - build U-Boot and OpenWRT from source
+- [docs/building.md](docs/building.md) - build U-Boot and OpenWrt from source
 - [docs/jtag.md](docs/jtag.md) - JTAG wiring, connectivity check, PLL/DRAM bootstrap
 - [docs/uboot.md](docs/uboot.md) - U-Boot board files, NOR image, and env layout
 - [docs/flashing.md](docs/flashing.md) - full first-install and sysupgrade procedures
-- [docs/openwrt.md](docs/openwrt.md) - OpenWRT board files, DTS, and package reference
-- [docs/vocore2.md](docs/vocore2.md) - VoCore2 bringup notes (development reference board)
+- [docs/openwrt.md](docs/openwrt.md) - OpenWrt board files, DTS, and package reference
+- [docs/wifi.md](docs/wifi.md) - WiFi EEPROM register map and calibration profile
+- [docs/vocore2.md](docs/vocore2.md) - VoCore2 as development proxy: hardware differences, JTAG, NOR/eMMC, WiFi EEPROM calibration
