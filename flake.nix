@@ -24,11 +24,11 @@
               export NIX_CFLAGS_COMPILE="-I/usr/include"
               export NIX_LDFLAGS="-L/usr/lib"
               export NIX_HARDENING_ENABLE=""
-              export LD_LIBRARY_PATH="/usr/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
               unset SOURCE_DATE_EPOCH
             '';
 
             targetPkgs = pkgs: with pkgs; [
+              glibc
               gcc gnumake bison flex gawk patch
               diffutils findutils coreutils
               git rsync wget unzip bzip2 gzip
