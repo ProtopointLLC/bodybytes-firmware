@@ -6,7 +6,7 @@
         {
             "label": "U-Boot: Build",
             "type": "shell",
-            "command": "nix develop .#uboot --command bash -c 'cd u-boot && make mrproper && make bodybytes_defconfig && make -j$(nproc)'",
+            "command": "nix develop .#uboot --command bash -c 'cd u-boot && make bodybytes_defconfig && make -j$(nproc)'",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",
@@ -14,12 +14,26 @@
             },
             "problemMatcher": {
                 "base": "$gcc",
-                "fileLocation": ["autoDetect", "${workspaceFolder}/u-boot"]
+                "fileLocation": [
+                    "autoDetect",
+                    "${workspaceFolder}/u-boot"
+                ]
             },
             "group": {
                 "kind": "build",
                 "isDefault": true
             }
+        },
+        {
+            "label": "U-Boot: Clean",
+            "type": "shell",
+            "command": "nix develop .#uboot --command bash -c 'cd u-boot && make mrproper'",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
         },
         {
             "label": "OpenWrt: Setup",
@@ -54,7 +68,10 @@
             },
             "problemMatcher": {
                 "base": "$gcc",
-                "fileLocation": ["autoDetect", "${workspaceFolder}/openwrt"]
+                "fileLocation": [
+                    "autoDetect",
+                    "${workspaceFolder}/openwrt"
+                ]
             },
             "group": {
                 "kind": "build",
@@ -86,11 +103,13 @@
                 "instanceLimit": 1
             },
             "problemMatcher": {
-                "pattern": { "regexp": "^$" },
+                "pattern": {
+                    "regexp": "^$"
+                },
                 "background": {
                     "activeOnStart": true,
                     "endsPattern": ".*OpenOCD: failed|ready.*",
-                    "beginsPattern": ".*Open On-Chip Debugger.*",
+                    "beginsPattern": ".*Open On-Chip Debugger.*"
                 }
             },
             "presentation": {
