@@ -44,7 +44,14 @@ make -j$(nproc)
 
 ### VS Code tasks
 
-The _**U-Boot: Build**_ task (default build task, `Ctrl+Shift+B`) runs `make mrproper`, `make bodybytes_defconfig`, and `make -j$(nproc)` inside `nix develop .#uboot` in one shot - no manual shell entry required.
+| Task | What it runs | When to use |
+|------|-------------|-------------|
+| _**U-Boot: Build**_ (`Ctrl+Shift+B`) | `make bodybytes_defconfig && make -j$(nproc)` | Default — incremental; always re-applies defconfig and picks up DTS changes |
+| _**U-Boot: Clean Build**_ | `make mrproper && make bodybytes_defconfig && make -j$(nproc)` | Full wipe when the build is stuck or after major restructuring |
+
+Both tasks run inside `nix develop .#uboot` automatically — no manual shell entry required.
+
+`make bodybytes_defconfig` is always run before `make` so that edits to `configs/bodybytes_defconfig` are always applied. DTS source changes are picked up by Make's timestamp-based dependency tracking.
 
 → See [flashing.md §4](flashing.md#4--program-spi-nor) for NOR programming.
 
