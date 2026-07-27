@@ -217,13 +217,15 @@ The MT7628 RFB DTS configures the MMC node for a removable SD card. The bodybyte
 
 **Pinctrl** - the RFB DTS uses `sd_router_mode`, which remaps `i2c`, `uart1`, `sdmode`, and other pin groups as GPIO to free them for routing chips. On bodybytes those peripherals are in use; their pin assignments must not change. `sd_iot_mode` (pre-defined in `mt7628a.dtsi`) sets `EPHY_APGIO_AIO_EN[4:1]=0xf` (MDI P1–P4 pads go digital), `SD_MODE=0` (SDXC signals on EPHY P3/P4 pads), and `ESD=0` (IoT routing). The SDXC data/cmd/clk lines emerge on the MDI P3/P4 pads exactly as the schematic wires them (SoC pins 51–57).
 
+`sd_iot_bias` is a board-specific pinctrl state in `bodybytes,bodybytes.dts`, applied alongside `sd_iot_mode` via `pinctrl-0 = <&sd_iot_mode &sd_iot_bias>`. It sets `bias-pull-up` for `sd_cmd`, `sd_d0`, `sd_d1`, `sd_d2`, `sd_d3` (GPIO#27, 25, 24, 29, 28). The MSDC PAD\_CTRL registers at 0x101300E4/E8 (CMDPU=1, DATPU=1) control the dedicated SDXC pad buffer, not the MDI physical pins — those pull-ups are ineffective in IoT mode. The U-Boot pinctrl driver (`pinctrl-mt7628.c`) writes the padconf block at SYSC+0x1300 (PAD\_PU\_G0), which is the correct path to physical MDI pad pull-ups. CLK (GPIO#26, `sd_clk`) is excluded: it is a driven output with MSDC CLKPD=1 providing a pull-down.
+
 **Card detect** - the MTK SDXC driver's `mt7620_compat` originally had `use_internal_cd = true` (the MT7628 shares this compat entry). This was removed in the patched [`u-boot/drivers/mmc/mtk-sd.c`](../u-boot/drivers/mmc/mtk-sd.c) so internal card-detect is no longer assumed by default. The DTS sets `builtin-cd = <0>` to make this explicit. The eMMC is always present; no card-detect mechanism is needed.
 
 **Bus width** - `bus-width = <4>` (4-bit). 8-bit is not possible: the dtsi defines `emmc_iot_8bit_mode` which would supply SD_D4–SD_D7 by remapping `groups = "uart2"; function = "sdxc d5 d4"`, conflicting with UART2 as the system console.
 
-**Clock** - `max-frequency = <1000000>` caps the SDXC clock at 1 MHz. This is conservative but sufficient for U-Boot boot time. No `cap-mmc-highspeed` or `non-removable` is set in the current DTS.
+**Clock** - `max-frequency = <1000000>` caps the SDXC clock at 1 MHz. Conservative but sufficient for bring-up; raise to 25 MHz (default-speed) or 48 MHz with `cap-sd-highspeed`/`cap-mmc-highspeed` once enumeration is confirmed.
 
-**Power sequencing** - [`u-boot/drivers/mmc/mtk-sd.c`](../u-boot/drivers/mmc/mtk-sd.c) was patched to call `mmc_pwrseq_get_power()` / `pwrseq_set_power()` at probe time (`CONFIG_MMC_PWRSEQ=y`). The current DTS does not include an `mmc-pwrseq` node, so the pwrseq code is compiled in but no pulse is issued. If an `mmc-pwrseq-emmc` node with `reset-gpios = <&gpio0 15 GPIO_ACTIVE_LOW>` is added to the DTS, U-Boot will pulse MDI_TN_P1 (GPIO#15, the eMMC RST_n line) at probe time to clear fault conditions.
+**Power sequencing** - [`u-boot/drivers/mmc/mtk-sd.c`](../u-boot/drivers/mmc/mtk-sd.c) was patched to call `mmc_pwrseq_get_power()` / `pwrseq_set_power()` at probe time (`CONFIG_MMC_PWRSEQ=y`). The DTS has an `emmc_pwrseq` node (`compatible = "mmc-pwrseq-emmc"`, `reset-gpios = <&gpio0 15 GPIO_ACTIVE_LOW>`) referenced by `mmc-pwrseq = <&emmc_pwrseq>` in `&mmc`. U-Boot pulses MDI_TN_P1 (GPIO#15, eMMC RST\_n) low at MMC probe time, clearing any eMMC fault state before the init sequence begins.
 
 ### GPIO pin map (EPHY/MDI pads used as GPIO)
 
@@ -232,7 +234,7 @@ When the EPHY pads are in digital mode (`ephy4_1_pad = digital` via `sd_iot_mode
 | Signal    | SoC pin | GPIO # | gpio0 offset | Purpose |
 |-----------|---------|--------|--------------|---------|
 | MDI_TP_P1 | 40      | 14     | 14           | Recovery-boot trigger input - TI DRV5032FCDBZT hall-effect sensor (omnipolar, active-low, open-drain, pull-up on board); low = magnet present = boot from NOR recovery partition |
-| MDI_TN_P1 | 42      | 15     | 15           | eMMC RST_n line (active-low); made driveable by `mdi_p1_gpio`; currently not driven (no `mmc-pwrseq` node in DTS) |
+| MDI_TN_P1 | 42      | 15     | 15           | eMMC RST_n (active-low); made driveable by `mdi_p1_gpio`; pulsed low at MMC probe by `mmc-pwrseq-emmc` (`reset-gpios = <&gpio0 15 GPIO_ACTIVE_LOW>`) |
 
 **How GPIO#14 and GPIO#15 are derived:** The MT7628 assigns GPIO numbers based on each pad's index in the pin table in [`u-boot/drivers/pinctrl/mtmips/pinctrl-mt7628.c`](../u-boot/drivers/pinctrl/mtmips/pinctrl-mt7628.c) (`mt7628_pins[]`). When `SPIS_MODE = gpio` (set by `mdi_p1_gpio`), the four SPIS pads become GPIOs at consecutive indices in that table:
 
@@ -243,7 +245,7 @@ When the EPHY pads are in digital mode (`ephy4_1_pad = digital` via `sd_iot_mode
 | 16                    | `spis_miso`| MDI_RP_P1 | 43      | 16     |
 | 17                    | `spis_mosi`| MDI_RN_P1 | 44      | 17     |
 
-U-Boot's `gpio` command uses a flat GPIO number = `bank × 32 + offset`. Both pads are in gpio0 (bank 0), so the flat numbers are 0×32+14 = **14** and 0×32+15 = **15**. These are verified from `mt7628_pins[]` indices and confirmed by `gpio_recovery=14` in the env. If `mmc-pwrseq-emmc` is added to the DTS, the correct DTS reference for the RST_n GPIO is `<&gpio0 15 GPIO_ACTIVE_LOW>`.
+U-Boot's `gpio` command uses a flat GPIO number = `bank × 32 + offset`. Both pads are in gpio0 (bank 0), so the flat numbers are 0×32+14 = **14** and 0×32+15 = **15**. These are verified from `mt7628_pins[]` indices and confirmed by `gpio_recovery=14` in the env. The RST\_n GPIO reference in the DTS is `<&gpio0 15 GPIO_ACTIVE_LOW>`.
 
 The eMMC data/cmd/clk signals (MDI P3/P4 pads) are driven by the SDXC controller and are not accessible as GPIO while `sd_iot_mode` is active:
 

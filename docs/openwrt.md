@@ -21,8 +21,7 @@ All files below live in the `openwrt/` submodule; the submodule is pinned to a c
 | [`openwrt/package/boot/uboot-tools/uboot-envtools/files/ramips`](../openwrt/package/boot/uboot-tools/uboot-envtools/files/ramips) | U-Boot env tool config; the `bodybytes,bodybytes` case calls `ubootenv_add_mtd "u-boot-env" "0x0" "0x1000" "0x10000"`, which resolves the `u-boot-env` MTD partition by name at runtime and writes the resulting `/dev/mtdN` path into `/etc/fw_env.config` |
 | [`openwrt/target/linux/ramips/mt76x8/base-files/etc/init.d/bootcount`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/init.d/bootcount) | Resets the SYSCTL MEMO2 bootcount register to zero (`devmem 0x1000006c 32 0xB0010000`) on every successful boot (START=99) |
 | [`openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh`](../openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh) | Sysupgrade dispatch; `platform_check_image` rejects non-sysupgrade-tar images (no `CONTROL` entry) and fails if the `kernel` or `rootfs` GPT partitions are not yet present on the eMMC; bodybytes case sets `CI_KERNPART="kernel"`, `CI_ROOTPART="rootfs"`, `CI_DATAPART="rootfs_data"`, resets the SYSCTL MEMO2 bootcount register to zero via `devmem` (no NOR write), then calls `emmc_do_upgrade` to write the kernel to p1 and the squashfs rootfs to p2; `platform_copy_config` dispatches to `emmc_copy_config` to save the sysupgrade config backup into the `rootfs_data` partition |
-| [`openwrt/target/linux/ramips/mt76x8/base-files/etc/banner`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/banner) | Custom ASCII art banner shown at login: Bodybytes slant ASCII art, then `%D` (distro name, "OpenWrt"), `%V` (version), and `%C` (revision code). Build date is appended by `00-bodybytes.sh`. |
-| [`openwrt/target/linux/ramips/mt76x8/base-files/etc/profile.d/00-bodybytes.sh`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/profile.d/00-bodybytes.sh) | Login profile script: prints the kernel build date extracted from `uname -v` below the banner |
+| [`openwrt/target/linux/ramips/mt76x8/base-files/etc/banner`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/banner) | Custom ASCII art banner shown at login: Bodybytes slant ASCII art, then `%D` (distro name, "OpenWrt"), `%V` (version), and `%C` (revision code). |
 | [`openwrt/target/linux/ramips/mt76x8/base-files/etc/profile.d/apk-cheatsheet.sh`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/profile.d/apk-cheatsheet.sh) | Login profile script: prints a one-line APK package manager hint if `apk` is available |
 
 ### What the DTS sets
@@ -77,7 +76,7 @@ The normal path for updating NOR is via JTAG with [`scripts/flash_nor_images.py`
 
 Together these mirror what `sd_iot_mode` does in `bodybytes_uboot.dtsi`, routing the SDXC data/cmd/clk lines to EPHY P3/P4 MDI pads (SoC pins 51–57).
 
-**`state_default`** - the system-wide default pinctrl state (inherited placeholder from `mt7628an.dtsi`, populated by the bodybytes DTSI). Sets `GPIO_MODE SPIS = gpio`, switching MDI P1 pads to GPIO function. Applied at pinctrl init time, before `gpio-button-hotplug` claims GPIO#14 (the hall sensor) at probe. GPIO#15 (MDI_TN_P1, the eMMC RST_n line) is also made driveable by this state; no power-sequencer node is present in the current DTS.
+**`state_default`** - the system-wide default pinctrl state, populated by the bodybytes DTSI. Sets `GPIO_MODE SPIS = gpio`, switching MDI P1 pads to GPIO#14–17, applied at pinctrl init before `gpio-button-hotplug` claims GPIO#14 at probe. GPIO#15 (MDI_TN_P1, eMMC RST\_n) is also made driveable. The `esd` and `sdmode` groups are intentionally **not** hogged here: the pinctrl core's exclusive ownership model would prevent `10130000.mmc` from later claiming those groups via its own `pinctrl-0 = <&sdxc_iot_mode>`, causing -EINVAL at sdhci probe. Those groups are owned and applied by sdhci.
 
 #### eMMC / microSD - `&sdhci`
 
@@ -86,6 +85,8 @@ Kingston EMMC128-IY29-5B111, 128 GB eMMC 5.1 (or microSD), on EPHY P3/P4 MDI pad
 | Property | Value | Reason |
 |----------|-------|--------|
 | `pinctrl-0` | `sdxc_iot_mode` | Overrides base `sdxc_pins`; applies EPHY routing. SPIS→GPIO mux is handled by `state_default` at pinctrl init. |
+| `pinctrl-1` | `sdxc_iot_mode` | Overrides base `sdxc_pins` (state_uhs for 1.8 V switching). UHS never activates (no UHS caps, fixed 3.3 V), but prevents the non-IoT pinctrl being applied if state_uhs is ever requested. |
+| `mmc-pwrseq` | `emmc_pwrseq` | Pulses GPIO#15 (eMMC RST\_n, MDI\_TN\_P1) low at probe via `mmc-pwrseq-emmc`, clearing any eMMC fault state before the init sequence. |
 | `vmmc-supply` | `reg_3v3` | Overrides the base DTSi `reg_vmmc` supply; explicit 3.3 V rail for eMMC VCC |
 | `vqmmc-supply` | `reg_3v3` | Overrides the base DTSi `reg_vqmmc` supply; explicit 3.3 V rail for eMMC VCCQ |
 | `no-1-8-v` | - | Prevents voltage-switch negotiation to 1.8 V; MT7628 SDXC runs at 3.3 V only |
