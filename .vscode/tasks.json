@@ -139,6 +139,22 @@
             }
         },
         {
+            "label": "JTAG: Flash U-Boot",
+            "type": "shell",
+            "command": "nix develop .#uboot --command python3 scripts/flash_nor_images.py --jtag --u-boot --u-boot-env --${input:board} --mac ${input:mac}",
+            "dependsOn": "JTAG: Start OpenOCD J-Link",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": [],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            }
+        },
+        {
             "label": "JTAG: Boot U-Boot from RAM",
             "type": "shell",
             "command": "nix develop .#uboot --command python3 scripts/boot_uboot_jtag.py --${input:board}",

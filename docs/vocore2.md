@@ -43,6 +43,8 @@ The stock VoCore2 module has **R9** (4.7 kΩ pull-up to 3V3) on TXD1 (GPIO13), w
 
 Leaving R9 populated and setting JP1 to 2-3 creates a voltage divider (≈1.65 V, undefined logic level) - the module modification is required.
 
+> **JTAG and eMMC/SD are mutually exclusive** — JTAG mode (JP1 at 2-3) breaks the SDXC bus that shares the EPHY pads, so you cannot RAM-boot U-Boot over JTAG and test eMMC/SD in the same session. Use JTAG to flash U-Boot to NOR, then set **JP1 to 1-2 ("GPIO")** and boot from NOR to exercise storage. Why: [jtag.md](jtag.md#jtag-and-sdemmc-are-mutually-exclusive).
+
 ### Pull-up resistors
 
 All five JTAG signals (TMS, TCK, TDI, TDO, TRST) need pull-ups to 3V3. The breakout provides these. RESET (PORST\_N) does not need an external pull-up.
@@ -144,6 +146,8 @@ Move your USB-serial adapter wires when switching between stock VoCore2 firmware
 
 ## eMMC / SD Card
 
+Confirmed working on VoCore2 with **JP1 in "GPIO" mode (JTAG off)**: a SanDisk SD card enumerates at **48 MHz SD High-Speed, 4-bit** in both U-Boot (`mmc info` → `SD High Speed (50MHz)`) and OpenWrt (`high speed SDHC`, `actual clock 48 MHz`), with clean reads. The SDXC bus runs on the EPHY pads (IoT mode), so — as noted above — it only works with JTAG disabled. See [uboot.md](uboot.md) and [openwrt.md](openwrt.md) for the driver/DTS details (both boards share this bus).
+
 ### Bus wiring
 
 The SDXC data bus is identically wired between bodybytes and VoCore2 - the same MDI pad → SD signal mapping on both boards:
@@ -170,7 +174,7 @@ Both use the legacy 4-bit data interface (SD\_D0–D3). 8-bit eMMC mode is not u
 
 The microSD breakout must expose all four data lines (D0–D3), CMD, and CLK - a **4-bit SDIO-capable** breakout is required. SPI-only breakouts (which expose only D0/MISO, CLK, CMD/MOSI, CS) will not work. The Adafruit 4682 exposes the full SDIO bus and is the tested choice.
 
-The Hardkernel reader board has a small pull-up resistor **R1** on RST\_n. RST\_n is tapped from the R1 pads with a bridge wire and connected to MDI\_TN\_P1 (GPIO#15) on the breakout, giving full pin parity with the bodybytes hardware setup. GPIO#15 is made driveable by the `state_default` pinctrl state (see [openwrt.md §Pin control](openwrt.md#pin-control---pinctrl)); no power-sequencer node is present in the DTS.
+The Hardkernel reader board has a small pull-up resistor **R1** on RST\_n. RST\_n is tapped from the R1 pads with a bridge wire and connected to MDI\_TN\_P1 (GPIO#15) on the breakout, giving full pin parity with the bodybytes hardware setup. GPIO#15 is made driveable by the `state_default` pinctrl state (see [openwrt.md §Pin control](openwrt.md#pin-control---pinctrl)), and the DTS's `emmc_pwrseq` node (`mmc-pwrseq-emmc`) pulses it low at MMC probe to reset the eMMC. (A plain microSD card has no RST\_n pin, so the pulse is a harmless no-op for card testing.)
 
 ### eMMC manufacturing from PC
 

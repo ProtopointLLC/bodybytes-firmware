@@ -45,7 +45,7 @@ The SPL serial driver also requires `CFG_SYS_NS16550_COM3` (UART2's MMIO address
 | UART2 TX | 47      | MDI_TP_P2 | TP20       |
 | UART2 RX | 48      | MDI_TN_P2 | TP19       |
 
-**U-Boot proper DTS:** The SPL configures `EPHY_GPIO_AIO_EN` in C code. U-Boot proper uses DM and applies pinctrl states at driver probe time: `&uart2` is enabled with `pinctrl-names = "default"` and `pinctrl-0 = <&uart2_pins &ephy_iot_mode>`. `uart2_pins` sets `UART2_MODE=0` (route UART2 signals to MDI P2 pads); `ephy_iot_mode` sets `AGPIO_CFG[20:17]=0xf` (MDI P1–P4 pads to digital mode, enabling the signal path). Both states are applied when uart2 is probed. The `uart2` node does not need an explicit `bootph-all` marker - U-Boot propagates the pre-relocation requirement via the `stdout-path` dependency chain.
+**U-Boot proper DTS:** The SPL configures `EPHY_GPIO_AIO_EN` in C code. U-Boot proper uses DM and applies pinctrl states at driver probe time. `&uart2` only needs `status = "okay"` - it inherits `pinctrl-0 = <&uart2_pins>` from `mt7628a.dtsi`, which sets `UART2_MODE=0` (route UART2 signals to MDI P2 pads). The EPHY digital switch (`AGPIO_CFG[20:17]=0xf`, MDI P1–P4 pads to digital mode) is **not** attached to `&uart2`; it is applied board-wide at pinctrl init via `ephy_iot_mode` in `&pinctrl`'s own `pinctrl-0 = <&state_default &mdi_p1_gpio &ephy_iot_mode>` (see [EPHY bring-up](#ephy-bring-up--why-ethernet-is-enabled)). That guarantees the UART2 signal path is live before the console is needed, independent of driver probe order. The `uart2` node does not need an explicit `bootph-all` marker - U-Boot propagates the pre-relocation requirement via the `stdout-path` dependency chain.
 
 ### Boot variables
 
@@ -166,6 +166,21 @@ The eMMC uses a GPT partition layout. Four additional options are set in [`u-boo
 | `CONFIG_CMD_PART=y` | `part start` / `part size` commands; used in `fit_load_mmc` to locate the `kernel` GPT partition |
 | `CONFIG_CMD_GPT=y` | `gpt write` command; available for ad-hoc partitioning from the U-Boot prompt (primary install uses `parted` from NOR recovery - see [flashing.md §5b](flashing.md#5b--first-install-from-nor-recovery)) |
 
+> **JTAG must be off for SD/eMMC.** SD/eMMC runs on the EPHY pads, and enabling CPU JTAG (`UART_TXD1`/`DBG_JTAG_MODE` strapped low) puts that block into a debug state that breaks the bus — the two are mutually exclusive. Strap `UART_TXD1` high (GPIO mode, the normal/eMMC configuration) except when actively flashing over JTAG. Full explanation: [jtag.md](jtag.md#jtag-and-sdemmc-are-mutually-exclusive).
+
+### MSDC driver fix
+
+The upstream `drivers/mmc/mtk-sd.c` shares one `msdc_init_hw()` across all MediaTek SoCs and writes values tuned for MT8173/MT7622 that are wrong for the MT7628 controller. The bodybytes tree carries a `mips_mt762x` flag (set on `mt7620_compat`, which MT7628 uses) that keeps the MT7628 hardware reset defaults instead — mirroring the OpenWrt kernel patches 831-01/02/03. Four writes are gated behind `if (!host->dev_comp->mips_mt762x)`:
+
+| Upstream write | Why it is wrong on MT7628 |
+|----------------|---------------------------|
+| `PATCH_BIT1 = 0xffff4089` | sets reserved bit 14; silicon reset is `0xffff0009` |
+| `PATCH_BIT0 = 0x403c0046` | touches reserved bits; silicon reset is `0x403c004f` |
+| `emmc50_cfg0` (struct offset 0x208) | that register does not exist on MT7628 (map ends ~0x104) |
+| `PAD_TUNE` bit 15 (`RXDLYSEL`) | reserved on MT7628; no such field |
+
+Plus two positive settings for `mips_mt762x`: `builtin_pad_ctrl`/`default_pad_dly` produce the vendor `PAD_TUNE = 0x84101010` (delay `0x10`, bit 15 = 0), and `msdc_set_mclk` enables rising-edge response/data sampling (`RSPL|DSPL|W_DSPL`) when `sclk > 25 MHz` — this is what makes 48 MHz High-Speed reliable. The driver also gained `mmc-pwrseq` support (see eMMC DTS below) and had `use_internal_cd = true` removed from `mt7620_compat`. Verified on silicon: `md.l 0xb01300b0 2` reads `403c004f ffff0009`, `md.l 0xb01300ec 1` reads `84101010`.
+
 ### SPI NOR flash
 
 **`CONFIG_SPI_FLASH_BAR=y`** - critical. The W25Q512JV is 64 MB but carries no `SPI_NOR_4B_OPCODES` flag, so it uses a Bank Address Register (BAR) to reach addresses above 16 MB. Without this option U-Boot can only see the first 16 MB of flash.
@@ -217,15 +232,33 @@ The MT7628 RFB DTS configures the MMC node for a removable SD card. The bodybyte
 
 **Pinctrl** - the RFB DTS uses `sd_router_mode`, which remaps `i2c`, `uart1`, `sdmode`, and other pin groups as GPIO to free them for routing chips. On bodybytes those peripherals are in use; their pin assignments must not change. `sd_iot_mode` (pre-defined in `mt7628a.dtsi`) sets `EPHY_APGIO_AIO_EN[4:1]=0xf` (MDI P1–P4 pads go digital), `SD_MODE=0` (SDXC signals on EPHY P3/P4 pads), and `ESD=0` (IoT routing). The SDXC data/cmd/clk lines emerge on the MDI P3/P4 pads exactly as the schematic wires them (SoC pins 51–57).
 
-`sd_iot_bias` is a board-specific pinctrl state in `bodybytes,bodybytes.dts`, applied alongside `sd_iot_mode` via `pinctrl-0 = <&sd_iot_mode &sd_iot_bias>`. It sets `bias-pull-up` for `sd_cmd`, `sd_d0`, `sd_d1`, `sd_d2`, `sd_d3` (GPIO#27, 25, 24, 29, 28). The MSDC PAD\_CTRL registers at 0x101300E4/E8 (CMDPU=1, DATPU=1) control the dedicated SDXC pad buffer, not the MDI physical pins — those pull-ups are ineffective in IoT mode. The U-Boot pinctrl driver (`pinctrl-mt7628.c`) writes the padconf block at SYSC+0x1300 (PAD\_PU\_G0), which is the correct path to physical MDI pad pull-ups. CLK (GPIO#26, `sd_clk`) is excluded: it is a driven output with MSDC CLKPD=1 providing a pull-down.
+**Pad pull-ups** - CMD and DAT0–3 must idle high in IoT mode. The board provides **external 10 kΩ pull-ups** on these lines, so no software pull-up state is used: `&mmc` applies `pinctrl-0 = <&sd_iot_mode>` alone. CLK (`sd_clk`) is a driven output and needs no pull-up. (The MSDC's own `PAD_CTRL` pull registers at 0x101300E0–E8 are inert on MT7628 — writes read back 0 — so pull-ups must be external or via the SYSC padconf; external is used.)
+
+**Response-sample edge** - `&mmc` sets `r_smpl = <0>` (RSPL falling edge), overriding the base `mt7628a.dtsi` default of `<1>`; this matches the vendor SDK. It only affects the low-speed init phase — above 25 MHz the driver forces the high-speed sample latches regardless (see [MSDC driver fix](#msdc-driver-fix)).
 
 **Card detect** - the MTK SDXC driver's `mt7620_compat` originally had `use_internal_cd = true` (the MT7628 shares this compat entry). This was removed in the patched [`u-boot/drivers/mmc/mtk-sd.c`](../u-boot/drivers/mmc/mtk-sd.c) so internal card-detect is no longer assumed by default. The DTS sets `builtin-cd = <0>` to make this explicit. The eMMC is always present; no card-detect mechanism is needed.
 
 **Bus width** - `bus-width = <4>` (4-bit). 8-bit is not possible: the dtsi defines `emmc_iot_8bit_mode` which would supply SD_D4–SD_D7 by remapping `groups = "uart2"; function = "sdxc d5 d4"`, conflicting with UART2 as the system console.
 
-**Clock** - `max-frequency = <1000000>` caps the SDXC clock at 1 MHz. Conservative but sufficient for bring-up; raise to 25 MHz (default-speed) or 48 MHz with `cap-sd-highspeed`/`cap-mmc-highspeed` once enumeration is confirmed.
+**Clock** - `max-frequency = <48000000>` with `cap-sd-highspeed` and `cap-mmc-highspeed`. This is SD/MMC High-Speed (50 MHz class), the fastest the MT7628 SDXC does at 3.3 V — HS200/HS400 need 1.8 V VQMMC, which the board does not have (`no-1-8-v`). Confirmed enumerating and reading at 48 MHz / 4-bit (a SanDisk SD32G came up as `SD High Speed (50MHz)`, 29.7 GiB). The >25 MHz sampling path is handled by the driver fix below.
 
 **Power sequencing** - [`u-boot/drivers/mmc/mtk-sd.c`](../u-boot/drivers/mmc/mtk-sd.c) was patched to call `mmc_pwrseq_get_power()` / `pwrseq_set_power()` at probe time (`CONFIG_MMC_PWRSEQ=y`). The DTS has an `emmc_pwrseq` node (`compatible = "mmc-pwrseq-emmc"`, `reset-gpios = <&gpio0 15 GPIO_ACTIVE_LOW>`) referenced by `mmc-pwrseq = <&emmc_pwrseq>` in `&mmc`. U-Boot pulses MDI_TN_P1 (GPIO#15, eMMC RST\_n) low at MMC probe time, clearing any eMMC fault state before the init sequence begins.
+
+### EPHY bring-up — why Ethernet is enabled
+
+SD/eMMC in IoT mode runs on the EPHY P3/P4 MDI pads. Putting those pads in digital mode (`ephy4_1_pad = digital`, via `sd_iot_mode`) only routes the SDXC signals onto the pads — it does **not** initialise the EPHY analog front-end. Left uninitialised, the EPHY holds these pads in an abnormal idle state (DAT0 cannot idle high even with the external pull-ups), so the card never enumerates. The EPHY must be brought up: a reset pulse plus `mt7628_ephy_init()` (which includes an explicit *"Fix EPHY idle state abnormal behavior"* MDIO write).
+
+Upstream U-Boot's [`drivers/net/mt7628-eth.c`](../u-boot/drivers/net/mt7628-eth.c) performs exactly that bring-up in `rt305x_esw_init()`, and it runs at **driver probe** (not at first network use) — the same mechanism every MT7628 board and the vendor SDK rely on.
+
+Bodybytes has no Ethernet ports, but the SD pads depend on that bring-up, so the eth driver is enabled solely for its probe side effect:
+
+- [`configs/bodybytes_defconfig`](../u-boot/configs/bodybytes_defconfig): `CONFIG_NET=y`, `CONFIG_MT7628_ETH=y`, `CONFIG_NET_RANDOM_ETHADDR=y` (replacing the former `CONFIG_NO_NET=y`). `CONFIG_NET` implies `NETDEVICES` → `DM_ETH`; `MT7628_ETH` selects `PHYLIB`.
+- `bodybytes,bodybytes.dts`: `&eth { status = "okay"; pinctrl-0 = <&ephy_iot_mode>; }`. No `mediatek,poll-link-phy`, so `phy_connect()` is skipped and probe completes with no cable attached. `ephy_iot_mode` keeps the P1–P4 pads digital so the eth driver never reverts them to analog.
+
+Boot path that triggers it with no network command:
+`initr_net` (gated on `CONFIG_NET`, **not** `CONFIG_CMD_NET`) → `eth_initialize()` → `uclass_first_device_check(UCLASS_ETH)` **probes** the device → `mt7628_eth_probe()` → `rt305x_esw_init()` → EPHY reset pulse + `mt7628_ephy_init()`.
+
+The only upstream board with SD (`mt7628-rfb`) avoids needing this by putting SD on non-EPHY pads (`sd_router_mode`) — not an option here since the board is hardwired to the EPHY pads. A leaner alternative to enabling the whole net stack would be a small `board_init()` that replicates the EPHY reset pulse + `mt7628_ephy_init()` MDIO writes directly (keeping `CONFIG_NO_NET=y`); the eth-driver approach was chosen because it is stock upstream code.
 
 ### GPIO pin map (EPHY/MDI pads used as GPIO)
 

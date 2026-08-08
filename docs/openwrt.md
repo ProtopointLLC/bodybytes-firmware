@@ -93,9 +93,27 @@ Kingston EMMC128-IY29-5B111, 128 GB eMMC 5.1 (or microSD), on EPHY P3/P4 MDI pad
 | `non-removable` | - | Card is always present; no CD polling needed |
 | `no-sdio` | - | Prevents SDIO (CMD5) probe; without this the MSDC driver sets `SDC_CFG_SDIO` in hardware and CMD5 causes "no support for card's volts" + CMD1 busy-poll timeout |
 
-`cap-mmc-highspeed` and `bus-width = <4>` are inherited from `mt7628an.dtsi`. High Speed SDR mode (≤52 MHz, ≤52 MB/s) is the fastest mode the MT7628 SDXC controller supports at 3.3 V VCCQ; HS200/HS400 require 1.8 V and are unreachable regardless.
+**Clock** - the board DTSI sets `max-frequency = <48000000>`; `cap-sd-highspeed`, `cap-mmc-highspeed`, and `bus-width = <4>` are inherited from `mt7628an.dtsi`. SD/MMC High-Speed (50 MHz class) is the fastest the MT7628 SDXC does at 3.3 V VCCQ — HS200/HS400 need 1.8 V and are unreachable. Confirmed working: a SanDisk SD32G enumerates as `high speed SDHC`, 4-bit, `actual clock 48 MHz`, and reads without error.
 
 8-bit bus width (`bus-width = <8>`) is not possible: the four additional data lines (SD_D4–SD_D7) would require `groups = "uart2"; function = "sdxc d5 d4"` (as defined in `emmc_iot_8bit_mode` in the dtsi), which conflicts with UART2 as the system console.
+
+**JTAG must be off.** SD/eMMC on the EPHY pads only works with `DBG_JTAG_MODE` disabled (`UART_TXD1` strapped high / GPIO mode); enabling CPU JTAG breaks the bus. They are mutually exclusive — see [jtag.md](jtag.md#jtag-and-sdemmc-are-mutually-exclusive).
+
+#### SD/eMMC driver & kernel patches
+
+The board uses the upstream MSDC driver via **`kmod-mmc-mtk`** (`CONFIG_MMC_MTK`, compatible `mediatek,mt7620-mmc`, `drivers/mmc/host/mtk-sd.c`), selected in `mt76x8.mk`. The out-of-tree `kmod-sdhci-mt7620` (`ralink,mt7620-sdhci`) was rejected because it does not call `mmc_of_parse()` — it would silently ignore `mmc-pwrseq` and most DTS properties.
+
+MT7628 support comes from three ramips patches to `mtk-sd.c` (mirrored by the U-Boot driver fix):
+
+| Patch | Effect |
+|-------|--------|
+| `831-01` | adds the `mips_mt762x` flag: hardcodes the vendor pad drive/`PAD_TUNE`/read-delay values, and enables high-speed response/data sampling above 25 MHz (what makes 48 MHz work) |
+| `831-02` | `support_cmd23 = false` — CMD23 is unreliable on this controller IP and causes I/O errors |
+| `831-03` | skips the `MSDC_PATCH_BIT`/`PATCH_BIT1` writes for `mips_mt762x` — those MT8173/MT7622 values corrupt the MT7628 controller; keep the reset defaults |
+
+Plus patch `809` adds the `esd`/`sdmode` groups and the `ephy-digital` property handler (§`&pinctrl`).
+
+**pwrseq packaging fix** — `mmc-pwrseq-emmc` needs `pwrseq_emmc.ko`. The generic config wants `CONFIG_PWRSEQ_EMMC=y`, but `depends on MMC` and `CONFIG_MMC=m` (from the MMC package) downgrade it to `=m`, and the resulting module was in no package's `FILES`. Fixed in `target/linux/ramips/modules.mk` by adding `CONFIG_PWRSEQ_EMMC` to `kmod-mmc-mtk`'s `KCONFIG` with `pwrseq_emmc.ko` in `FILES` — so RST_n pulses via `mmc-pwrseq-emmc` actually work.
 
 #### Boot mode selector - `keys`
 
@@ -109,7 +127,11 @@ GPIO#14 is on the same MDI P1 pad group as GPIO#15 (eMMC RST_n). The `state_defa
 
 #### Ethernet - `&ethernet` / `&esw`
 
-Both disabled. Bodybytes has no physical Ethernet ports; the MT7628 internal switch is unused.
+Both left **enabled** (their `mt7628an.dtsi` default) even though bodybytes has no physical Ethernet ports. The switch/PHY block is kept solely for a side effect that SD/eMMC depends on: SD runs on the EPHY P3/P4 MDI pads in IoT mode, and `ephy-digital` only routes the SDXC signals onto those pads — it does **not** initialise the EPHY analog front-end. Probing `&ethernet`/`&esw` runs the ramips switch/PHY driver's EPHY bring-up (reset pulse + the *"fix EPHY idle state"* MDIO sequence), which the SD pads require to idle correctly. Disabling them would leave the SD pads in an abnormal idle state and the card would not enumerate. The unused switch just registers netdevs that are left unconfigured. (U-Boot solves the identical dependency by enabling its eth driver — see [uboot.md](uboot.md).)
+
+#### USB - `&usbphy` / `&ehci` / `&ohci`
+
+All three disabled. `mt7628an.dtsi` leaves the USB 2.0 host (EHCI/OHCI) and its PHY enabled by default, but bodybytes has no USB connector. Disabling `&usbphy`, `&ehci`, and `&ohci` stops the kernel initialising an unusable controller and keeps the boot lean. (The U-Boot build has no USB support compiled in at all, so its equivalent DTS node is inert.)
 
 #### UART0 - `&uartlite`
 
@@ -162,7 +184,7 @@ GPT partition 1 (`kernel`) holds the raw FIT image blob with no filesystem. `emm
 - `dtc` - device tree compiler; included for on-device DTS/DTB debugging.
 - `iperf3` - network throughput benchmarking; run `iperf3 -s` on device, `iperf3 -c bodybytes.local` from a client to measure WiFi throughput under load.
 - `-wpad-basic-mbedtls wpad-openssl` - swaps the subtarget default for the full WPA supplicant/hostapd build with OpenSSL; required for WPA3 (SAE) and 802.11r. The MT7628AN mt76 driver sets `IEEE80211_HW_MFP_CAPABLE` via the shared mt76 framework (`mac80211.c:476`), confirming hardware 802.11w support.
-- `-swconfig` - removes the `swconfig` Ethernet switch configuration tool from the image. `swconfig` is in the mt76x8 subtarget `DEFAULT_PACKAGES` for the many mt76x8 boards that have an internal switch, but bodybytes disables both `&ethernet` and `&esw` in the DTS. The kernel driver never probes, so `swconfig` would find no switch to configure — it is dead weight.
+- `-swconfig` - removes the `swconfig` Ethernet switch configuration tool from the image. `swconfig` is in the mt76x8 subtarget `DEFAULT_PACKAGES` for the many mt76x8 boards that have an internal switch. Bodybytes keeps `&ethernet`/`&esw` enabled (for the EPHY bring-up the SD pads depend on — see [Ethernet](#ethernet---ethernet--esw)), so the switch driver does probe, but the board exposes no Ethernet ports and there is nothing to configure — `swconfig` is dead weight either way.
 - `luci-ssl-openssl` - LuCI collection package that pulls in `luci-light`, `libustream-openssl`, and `openssl-util`. Enables HTTPS for the LuCI web interface; uhttpd listens on both port 80 (HTTP, redirects to HTTPS) and port 443. OpenSSL is already in the image from `wpad-openssl` so this adds only the ustream TLS glue and the `openssl` tool used for certificate generation. Replaces `libustream-mbedtls` as the ustream TLS backend.
 - `luci-app-ttyd` - web terminal in LuCI; provides browser-based shell access without SSH, critical once the device is implanted and serial is inaccessible. Included in both profiles so recovery also has a web terminal.
 

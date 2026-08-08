@@ -59,6 +59,27 @@ With `trst_only`, OpenOCD resets only the TAP when `reset` is issued. The CPU is
 
 ---
 
+## JTAG and SD/eMMC are mutually exclusive
+
+`UART_TXD1` is the MT7628 `DBG_JTAG_MODE` bootstrap, sampled at power-on reset and latched into the **read-only** `SYSCFG0` bit 8:
+
+| `UART_TXD1` at reset | `DBG_JTAG_MODE` | Effect |
+|----------------------|-----------------|--------|
+| high (pull-up)  | 1 | Normal — the five `EPHY_LED` pins are Ethernet LEDs, **JTAG disabled** |
+| low (pull-down) | 0 | **JTAG enabled** — those pins become `TMS`/`TCK`/`TDI`/`TDO`/`TRST` |
+
+The catch: on this SoC the SD/eMMC (SDXC) controller is muxed onto the **EPHY (Ethernet-PHY) pads** ("IoT" mode). `DBG_JTAG_MODE=0` does not merely re-route the LED pins — it puts the whole EPHY block into a debug state, which **breaks the SD/eMMC bus**. The CMD line stops responding, so every command reads back all-zero and the card never enumerates (Linux loops on `no support for card's volts`; U-Boot's `mmc rescan` fails silently).
+
+This is a **hardware** mutual-exclusion, not a software setting: it is latched into a read-only bit at reset, and every *writable* pin-mux register is identical in both modes — there is no register to flip at runtime to get both at once. **You cannot debug the CPU over JTAG and use SD/eMMC in the same boot.**
+
+**Workflow — strap for JTAG only to flash/bring-up, then strap back to run storage:**
+- **bodybytes board:** `UART_TXD1` carries a pull-up (GPIO / JTAG-off) for normal eMMC operation; only pull it low when actively using JTAG.
+- **VoCore2 breakout:** `JP1` at "GPIO" (1-2) = SD/eMMC works; `JP1` at "JTAG" (2-3) = JTAG works — see [vocore2.md](vocore2.md).
+
+So to test SD/eMMC in U-Boot: flash U-Boot to NOR over JTAG, then strap to GPIO mode, reboot, and drive U-Boot over the UART console.
+
+---
+
 ## Step 1 - Connect and Halt at Reset
 
 Enter the dev shell first - it sets `OPENOCD_SCRIPTS` so [`openocd/mt7628.cfg`](../openocd/mt7628.cfg) and its dependencies are found by name:
