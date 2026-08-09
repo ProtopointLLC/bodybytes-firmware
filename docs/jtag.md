@@ -68,9 +68,38 @@ With `trst_only`, OpenOCD resets only the TAP when `reset` is issued. The CPU is
 | high (pull-up)  | 1 | Normal — the five `EPHY_LED` pins are Ethernet LEDs, **JTAG disabled** |
 | low (pull-down) | 0 | **JTAG enabled** — those pins become `TMS`/`TCK`/`TDI`/`TDO`/`TRST` |
 
-The catch: on this SoC the SD/eMMC (SDXC) controller is muxed onto the **EPHY (Ethernet-PHY) pads** ("IoT" mode). `DBG_JTAG_MODE=0` does not merely re-route the LED pins — it puts the whole EPHY block into a debug state, which **breaks the SD/eMMC bus**. The CMD line stops responding, so every command reads back all-zero and the card never enumerates (Linux loops on `no support for card's volts`; U-Boot's `mmc rescan` fails silently).
+The catch: on this SoC the SD/eMMC (SDXC) controller is muxed onto the **EPHY (Ethernet-PHY) pads** ("IoT" mode). Enabling JTAG **breaks the SD/eMMC bus** — the CMD line stops responding, so every command reads back all-zero and the card never enumerates (Linux loops on `no support for card's volts`; U-Boot's `mmc rescan` fails silently).
 
-This is a **hardware** mutual-exclusion, not a software setting: it is latched into a read-only bit at reset, and every *writable* pin-mux register is identical in both modes — there is no register to flip at runtime to get both at once. **You cannot debug the CPU over JTAG and use SD/eMMC in the same boot.**
+This is a **hardware** mutual-exclusion, not a software setting: it is latched into a read-only bit at reset, and every *writable* pin-mux register is identical in both modes (measured — `GPIO1_MODE`, `AGPIO_CFG`, `GPIO2_MODE` all byte-identical whether the strap is high or low). There is no register to flip at runtime to get both at once. **You cannot debug the CPU over JTAG and use SD/eMMC in the same boot.**
+
+### Why: the SD bus doubles as the Andes JTAG
+
+The MT7628 has **two processors**, and therefore two JTAG interfaces:
+
+- **MIPS 24KEc** — the main application CPU (575/580 MHz) running BootROM → U-Boot → Linux. This is the one you debug during bring-up.
+- **Andes "N9"** — a separate small coprocessor (Andes/AndeStar ISA) that runs the **Wi-Fi firmware** (802.11 MAC/baseband; the `mt7628_e1/e2.bin` blobs). You essentially never debug it.
+
+| | MIPS JTAG | Andes JTAG |
+|---|---|---|
+| Debugs | MIPS 24KEc (main CPU) | Andes N9 (Wi-Fi coprocessor) |
+| Debug arch | MIPS **EJTAG** | Andes **AICE / AndeStar** |
+| Pins | `EPHY_LED0–4` (139–143) — where the J-Link connects | the **SDXC data pins** (`SD_MODE=3`) |
+| Tooling | OpenOCD, `mips_m4k` (this doc) | Andes ICEman (rarely used) |
+
+"JTAG" in this doc always means the **MIPS EJTAG** on the EPHY_LED pins. The Andes JTAG is collateral: you can't select just one, because both are gated by the single `DBG_JTAG_MODE` strap — and the Andes TAP's pins are the SD bus.
+
+The overlap is in the datasheet register fields — two independent JTAG-vs-storage collisions, one strap that enables both:
+
+- **`SYSCFG0` bit 8 `DBG_JTAG_MODE`** — "JTAG for MIPS **and Andes**". The single `UART_TXD1` strap enables *both* JTAG TAPs: the MIPS CPU's and the Andes (N9 Wi-Fi coprocessor) one.
+- **`GPIO1_MODE` (`0x10000060`) bits [11:10] `SD_MODE`** — "SDXC GPIO mode: `0: SDXC`, `1: GPIO`, `2: UTIF`, **`3: Andes JTAG`**". The SDXC data pins *are* an alternate for the **Andes JTAG** interface — the same silicon.
+- **`AGPIO_CFG` (`0x1000003C`) bits [20:17] `EPHY_GPIO_AIO_EN`** — selects EPHY P1–P4 as digital PADs (reset = digital); this is what routes SDXC onto the EPHY pads in the first place.
+
+So the MIPS JTAG shares the **EPHY_LED** pins (where the J-Link connects), the **Andes JTAG shares the SD data pins** (`SD_MODE=3`), and `DBG_JTAG_MODE` enables both at once. Be precise about how much of this the datasheet actually proves:
+
+- **Confirmed (datasheet):** the *sharing*. `SD_MODE = 3 = Andes JTAG` is a literal register-field value — those pins are designed to be either SDXC or the Andes debug interface. (Only the field description states it; the SD pin-share table tabulates just the `SDXC` and `GPIO` columns, so there is no per-pin JTAG-signal map.)
+- **Inferred (measured, not documented):** the *runtime break*. With JTAG strapped on, `SD_MODE` still reads `0`/SDXC — the pins are **not** re-muxed to Andes JTAG — yet SD fails anyway. So the disturbance happens **below the mux**, in the shared debug/analog state the strap creates. That is why every writable register is identical in both modes and none of them undoes it, and why **time-sharing is the only option** (§ workflow below).
+
+Net: the datasheet confirms the SD bus and the Andes debug interface are the same silicon, but stops short of explaining why enabling `DBG_JTAG_MODE` kills the bus while the mux still points at SDXC. This conflict is called out as a warning nowhere — in the datasheet or in vendor/OpenWrt docs — the register fields above are its only trace.
 
 **Workflow — strap for JTAG only to flash/bring-up, then strap back to run storage:**
 - **bodybytes board:** `UART_TXD1` carries a pull-up (GPIO / JTAG-off) for normal eMMC operation; only pull it low when actively using JTAG.

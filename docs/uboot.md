@@ -12,7 +12,7 @@ Source tree: `u-boot/` submodule (tag `v2026.04`) - see [building.md](building.m
 | [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) | Default environment: `bootcmd`, `boot_selected`, `boot_auto`, `boot_mmc`, `boot_sf`, `fit_load_mmc`, `fit_load_sf`, `fit_get_size`, `altbootcmd`, `bootmenu_*`, address/layout variables; auto-detected by the build system and compiled into `default_environment[]`; also used by [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) as `mkenvimage` input |
 | [`u-boot/board/bodybytes/bodybytes/Kconfig`](../u-boot/board/bodybytes/bodybytes/Kconfig) | Board vendor/name declarations |
 | [`u-boot/board/bodybytes/bodybytes/MAINTAINERS`](../u-boot/board/bodybytes/bodybytes/MAINTAINERS) | File ownership record |
-| [`u-boot/drivers/mmc/mtk-sd.c`](../u-boot/drivers/mmc/mtk-sd.c) | MT7628 MSDC MMC driver: patched to add `mmc-pwrseq` support at probe time and to remove the hardcoded `use_internal_cd = true` from `mt7620_compat` (card-detect is now disabled via `builtin-cd = <0>` in the DTS instead) |
+| [`u-boot/drivers/mmc/mtk-sd.c`](../u-boot/drivers/mmc/mtk-sd.c) | MT7628 MSDC MMC driver: adds a `mips_mt762x` flag on `mt7620_compat` that gates off the MT8173/MT7622 register writes that corrupt the MT7628 controller and enables rising-edge sampling above 25 MHz for reliable 48 MHz (see [MSDC driver fix](#msdc-driver-fix)); also adds `mmc-pwrseq` support at probe time and removes the hardcoded `use_internal_cd = true` from `mt7620_compat` (card-detect is disabled via `builtin-cd = <0>` in the DTS instead) |
 | [`u-boot/arch/mips/mach-mtmips/mt7628/Kconfig`](../u-boot/arch/mips/mach-mtmips/mt7628/Kconfig) | MT7628 SoC Kconfig: adds `BOARD_BODYBYTES` entry and sources the board Kconfig |
 | [`u-boot/arch/mips/dts/Makefile`](../u-boot/arch/mips/dts/Makefile) | DTS build list: adds `bodybytes,bodybytes.dtb` under `CONFIG_BOARD_BODYBYTES` |
 
@@ -174,7 +174,7 @@ The upstream `drivers/mmc/mtk-sd.c` shares one `msdc_init_hw()` across all Media
 
 | Upstream write | Why it is wrong on MT7628 |
 |----------------|---------------------------|
-| `PATCH_BIT1 = 0xffff4089` | sets reserved bit 14; silicon reset is `0xffff0009` |
+| `PATCH_BIT1 = 0xffff4089` | keeps the reset instead (`0xffff0009` on silicon); bits [31:23] are nine active-high clock-enable gates that must stay set — the MT8173/MT7622 value corrupts the MT762x controller state, and the vendor SDK's `0x11` would clear the gates outright |
 | `PATCH_BIT0 = 0x403c0046` | touches reserved bits; silicon reset is `0x403c004f` |
 | `emmc50_cfg0` (struct offset 0x208) | that register does not exist on MT7628 (map ends ~0x104) |
 | `PAD_TUNE` bit 15 (`RXDLYSEL`) | reserved on MT7628; no such field |
@@ -240,7 +240,7 @@ The MT7628 RFB DTS configures the MMC node for a removable SD card. The bodybyte
 
 **Bus width** - `bus-width = <4>` (4-bit). 8-bit is not possible: the dtsi defines `emmc_iot_8bit_mode` which would supply SD_D4–SD_D7 by remapping `groups = "uart2"; function = "sdxc d5 d4"`, conflicting with UART2 as the system console.
 
-**Clock** - `max-frequency = <48000000>` with `cap-sd-highspeed` and `cap-mmc-highspeed`. This is SD/MMC High-Speed (50 MHz class), the fastest the MT7628 SDXC does at 3.3 V — HS200/HS400 need 1.8 V VQMMC, which the board does not have (`no-1-8-v`). Confirmed enumerating and reading at 48 MHz / 4-bit (a SanDisk SD32G came up as `SD High Speed (50MHz)`, 29.7 GiB). The >25 MHz sampling path is handled by the driver fix below.
+**Clock** - `max-frequency = <26000000>` with `cap-sd-highspeed` and `cap-mmc-highspeed`. SD/MMC High-Speed (50 MHz class) is the fastest the MT7628 SDXC does at 3.3 V — HS200/HS400 need 1.8 V VQMMC, which the board does not have (`no-1-8-v`) — but the usable clock depends on wiring: the bus runs on marginal EPHY pads, so **on loose/long dev-rig jumper wiring 48 MHz gives CMD-line errors and the clock is dropped** (26 MHz; kept the same in the OpenWrt DTS so both stages share the bus at one speed — see [vocore2.md §Bus speed depends on your wiring](vocore2.md#bus-speed-depends-on-your-wiring)). 26 stays above 25 MHz so the driver's rising-edge sampling path (below) still applies. On clean soldered traces the bus enumerates and reads at 48 MHz / 4-bit (a SanDisk SD32G came up as `SD High Speed (50MHz)`, 29.7 GiB).
 
 **Power sequencing** - [`u-boot/drivers/mmc/mtk-sd.c`](../u-boot/drivers/mmc/mtk-sd.c) was patched to call `mmc_pwrseq_get_power()` / `pwrseq_set_power()` at probe time (`CONFIG_MMC_PWRSEQ=y`). The DTS has an `emmc_pwrseq` node (`compatible = "mmc-pwrseq-emmc"`, `reset-gpios = <&gpio0 15 GPIO_ACTIVE_LOW>`) referenced by `mmc-pwrseq = <&emmc_pwrseq>` in `&mmc`. U-Boot pulses MDI_TN_P1 (GPIO#15, eMMC RST\_n) low at MMC probe time, clearing any eMMC fault state before the init sequence begins.
 

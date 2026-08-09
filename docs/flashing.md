@@ -141,16 +141,18 @@ U-Boot should appear on **UART2 (TP19/TP20)** at **115200 8N1** without any JTAG
 
 ### 5a - GPT partition layout
 
+**Hardware partitions vs. this GPT.** A real eMMC exposes several JEDEC *hardware* partitions as separate block devices: the User Data Area (`/dev/mmcblk0`), two small Boot Area Partitions (`/dev/mmcblk0boot0` / `boot1`, typically 2–4 MB, held read-only by the kernel via `force_ro`), and usually an RPMB (`/dev/mmcblk0rpmb`). These are fixed features of the chip, present regardless of content. The GPT and all four partitions below live entirely on the **user area** (`mmcblk0`); bodybytes boots from NOR, so the boot/RPMB areas are unused and left untouched — `parted`, `mkfs`, sysupgrade and the §5b wipe all operate on `mmcblk0` only. (An SD card has no boot/RPMB areas, which is why the SD dev rig shows only `mmcblk0`.)
+
 All four partitions use the "Linux filesystem" GPT type GUID (`0FC63DAF…`), set automatically by `parted mkpart` without an explicit filesystem type. The GPT type does not enforce any filesystem; only p3 and p4 have actual filesystems.
 
 | # | Label | Filesystem | Size | Content |
 |---|-------|-----------|------|---------|
-| 1 | `kernel` | none (raw) | 32 MB | Raw FIT image (LZMA kernel + DTB); written by sysupgrade via `dd`; read by U-Boot via `mmc read` |
+| 1 | `kernel` | none (raw) | 32 MB | Raw FIT image (gzip kernel + DTB); written by sysupgrade via `dd`; read by U-Boot via `mmc read` |
 | 2 | `rootfs` | none (raw) | 512 MB | Raw squashfs rootfs; written by sysupgrade via `dd`; mounted read-only by the kernel |
-| 3 | `rootfs_data` | ext4 | 4 GB | Overlay for OpenWrt packages and config; auto-mounted at `/overlay` by libfstools on every boot |
-| 4 | `data` | ext4 | ~123.5 GB (remainder) | User file storage; auto-mounted at `/mnt/data` by block-mount |
+| 3 | `rootfs_data` | f2fs (auto) | 4 GB | Overlay for OpenWrt packages and config; **not** formatted at install — `mount_root` creates it as F2FS (flash-friendly log-structured fs — better suited than ext4 to the overlay's small random writes, less write amplification/wear on the eMMC) on first boot, then auto-mounts it at `/overlay` by GPT label every boot |
+| 4 | `data` | ext4 | ~123.5 GB (remainder) | User file storage; auto-mounted at `/mnt/data` by block-mount. Deliberately ext4 (not F2FS like the overlay): this partition holds irreplaceable user data, so journaling recovery and mature `e2fsck` tooling to salvage it after a power cut matter more than the overlay's flash-write optimization |
 
-`kernel` and `rootfs` hold raw binary data - no filesystem is created on them during first install, and sysupgrade raw-writes them with `dd` on every upgrade. `fit_load_mmc` does a two-pass read: reads one block first to parse the FIT header and determine `fit_size`, then reads exactly that many blocks — not the full 32 MB. `bootm` parses the FIT header to locate the LZMA kernel and DTB nodes, decompresses the kernel, applies memory and bootargs fixup to the extracted DTB, and boots. `root=/dev/mmcblk0p2 rootwait` in the main DTB's `chosen/bootargs` node tells the kernel where to find the squashfs rootfs.
+`kernel` and `rootfs` hold raw binary data - no filesystem is created on them during first install, and sysupgrade raw-writes them with `dd` on every upgrade. `fit_load_mmc` does a two-pass read: reads one block first to parse the FIT header and determine `fit_size`, then reads exactly that many blocks — not the full 32 MB. `bootm` parses the FIT header to locate the gzip kernel and DTB nodes, decompresses the kernel, applies memory and bootargs fixup to the extracted DTB, and boots. `root=/dev/mmcblk0p2 rootwait` in the main DTB's `chosen/bootargs` node tells the kernel where to find the squashfs rootfs.
 
 The `rootfs_data` label is the standard libfstools extroot partition name. `fstools` mounts it at `/overlay` automatically at every boot with no UCI fstab entry required.
 
@@ -160,21 +162,52 @@ The NOR recovery image (initramfs) includes `parted` in `DEVICE_PACKAGES`, so pa
 
 **Step 1 - boot NOR recovery**
 
-Hold the magnet against the hall-effect sensor during power-on. U-Boot detects GPIO#14 low and runs `boot_sf` (via `boot_selected`), booting the initramfs from NOR. The device comes up as a standard OpenWrt AP; connect to its WiFi network and SSH in as root (no password by default).
+Hold the magnet against the hall-effect sensor during power-on. U-Boot detects GPIO#14 low and runs `boot_sf` (via `boot_selected`), booting the initramfs from NOR. The device comes up as a standard OpenWrt AP; connect to its WiFi network and SSH in as root (default password is `bodybytes`).
+
+**Wipe first if the eMMC/card is not blank** (skip on a factory-fresh card)
+
+To drop any existing partitions and reset the card so Step 2 starts from a clean slate, unmount anything the recovery auto-mounted and TRIM-erase the whole user area with `blkdiscard` — one near-instant, wear-levelling pass that discards every block, clearing both GPT copies (primary at the start *and* backup at the end) and all partition data at once.
+
+```sh
+umount /dev/mmcblk0p*
+blkdiscard -f /dev/mmcblk0
+partprobe /dev/mmcblk0
+```
+
+`-f` forces past the "this erases all data" guard, and `blkdiscard` touches only the user area (`mmcblk0`) — the `boot0`/`boot1` hardware partitions are left alone. If a card reports discard is unsupported, fall back to zeroing both GPTs: `dd if=/dev/zero of=/dev/mmcblk0 bs=512 count=2048` and again at `seek=$(( $(cat /sys/block/mmcblk0/size) - 2048 ))`.
 
 **Step 2 - partition the eMMC** (one-time, on a fresh or wiped eMMC)
 
-Create a GPT with `parted -s /dev/mmcblk0 mklabel gpt`, then create the four partitions matching the layout in §5a: `kernel` at 1–33 MiB, `rootfs` at 33–545 MiB, `rootfs_data` at 545–4641 MiB, and `data` from 4641 MiB to 100%. Use `parted -s /dev/mmcblk0 mkpart <label> <start> <end>` for each — `parted` uses the name argument as the GPT partition label. Finally, `mkfs.ext4 -L rootfs_data /dev/mmcblk0p3` and `mkfs.ext4 -L data /dev/mmcblk0p4` format the overlay and data partitions; the `-L` flag sets the ext4 filesystem label that `block-mount` uses to auto-mount.
+Create a GPT and the four partitions matching the layout in §5a. `parted` uses the name argument as the GPT partition label; on `data` the `mkfs.ext4 -L` flag also sets the ext4 filesystem label that `block-mount` uses to auto-mount `/mnt/data`.
 
-**Step 3 - install via sysupgrade**
+```sh
+parted -s /dev/mmcblk0 mklabel gpt
+parted -s /dev/mmcblk0 mkpart kernel 1MiB 33MiB
+parted -s /dev/mmcblk0 mkpart rootfs 33MiB 545MiB
+parted -s /dev/mmcblk0 mkpart rootfs_data 545MiB 4641MiB
+parted -s /dev/mmcblk0 mkpart data 4641MiB 100%
+sync
+partprobe /dev/mmcblk0
+mkfs.ext4 -E root_owner=8000:8000 -L data /dev/mmcblk0p4
+sync
+reboot
+```
+
+Only `data` is formatted here. **`rootfs_data` (the overlay) is left unformatted on purpose** — `mount_root` formats it as F2FS on first boot (the image ships `mkf2fs`/`kmod-fs-f2fs`), and re-creates it the same way after a `sysupgrade -n` or factory reset; formatting it manually would just be overwritten. `root_owner=8000:8000` makes the `data` root dir owned by uid/gid 8000 — the `bodybytes` user `90_defaults` creates — so the authenticated Samba share can write to `/mnt/data` as `bodybytes` without `force user = root`.
+
+**Step 3 - reboot recovery**
+
+The `reboot` will cycle back into NOR recovery, as the eMMC is empty. This is required after partitioning: `sysupgrade` locates the `kernel`/`rootfs` partitions by GPT label, and the running kernel only picks up the new labels on a fresh boot scan. Skipping this reboot makes the next step fail with `eMMC partition "kernel" not found`. Do **not** re-run the partitioning — the eMMC is already correct.
+
+**Step 4 - install via sysupgrade**
 
 Transfer `sysupgrade.bin` to the device and run sysupgrade. Either:
 
-_Via LuCI web interface:_ open `http://192.168.1.1` → System → Backup / Flash Firmware → Flash new firmware image → upload [`openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin).
+_Via LuCI web interface:_ open `http://192.168.1.1` / `https://bodybytes.local` (default password `bodybytes`) → System → Backup / Flash Firmware → Flash new firmware image → upload [`openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin).
 
 _Via SSH:_ copy `sysupgrade.bin` to `/tmp/` on the device with `scp`, then run `sysupgrade -n /tmp/<filename>` on the device (`-n` skips preserving settings, appropriate for first install).
 
-`emmc_do_upgrade` finds `kernel` and `rootfs` partitions by GPT label, writes the kernel and squashfs, and reboots into the new firmware. All subsequent upgrades follow the same flow (web UI or `sysupgrade`), without the partitioning step.
+`emmc_do_upgrade` finds `kernel` and `rootfs` partitions by GPT label, writes the kernel and squashfs, and reboots into the new firmware. All subsequent upgrades follow the same flow (web UI or `sysupgrade`) from the installed system, without the partitioning or recovery-reboot steps.
 
 ### 5c - OpenWrt storage mounts
 

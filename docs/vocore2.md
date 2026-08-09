@@ -146,7 +146,7 @@ Move your USB-serial adapter wires when switching between stock VoCore2 firmware
 
 ## eMMC / SD Card
 
-Confirmed working on VoCore2 with **JP1 in "GPIO" mode (JTAG off)**: a SanDisk SD card enumerates at **48 MHz SD High-Speed, 4-bit** in both U-Boot (`mmc info` → `SD High Speed (50MHz)`) and OpenWrt (`high speed SDHC`, `actual clock 48 MHz`), with clean reads. The SDXC bus runs on the EPHY pads (IoT mode), so — as noted above — it only works with JTAG disabled. See [uboot.md](uboot.md) and [openwrt.md](openwrt.md) for the driver/DTS details (both boards share this bus).
+Confirmed working on VoCore2 with **JP1 in "GPIO" mode (JTAG off)**: a SanDisk SD card enumerates at **48 MHz SD High-Speed, 4-bit** in both U-Boot (`mmc info` → `SD High Speed (50MHz)`) and OpenWrt (`high speed SDHC`, `actual clock 48 MHz`), with clean reads. The SDXC bus runs on the EPHY pads (IoT mode), so — as noted above — it only works with JTAG disabled. See [uboot.md](uboot.md) and [openwrt.md](openwrt.md) for the driver/DTS details (both boards share this bus). **48 MHz is not guaranteed on every dev rig** — on long/loose jumper wiring the clock must be dropped; see [Bus speed depends on your wiring](#bus-speed-depends-on-your-wiring).
 
 ### Bus wiring
 
@@ -175,6 +175,21 @@ Both use the legacy 4-bit data interface (SD\_D0–D3). 8-bit eMMC mode is not u
 The microSD breakout must expose all four data lines (D0–D3), CMD, and CLK - a **4-bit SDIO-capable** breakout is required. SPI-only breakouts (which expose only D0/MISO, CLK, CMD/MOSI, CS) will not work. The Adafruit 4682 exposes the full SDIO bus and is the tested choice.
 
 The Hardkernel reader board has a small pull-up resistor **R1** on RST\_n. RST\_n is tapped from the R1 pads with a bridge wire and connected to MDI\_TN\_P1 (GPIO#15) on the breakout, giving full pin parity with the bodybytes hardware setup. GPIO#15 is made driveable by the `state_default` pinctrl state (see [openwrt.md §Pin control](openwrt.md#pin-control---pinctrl)), and the DTS's `emmc_pwrseq` node (`mmc-pwrseq-emmc`) pulses it low at MMC probe to reset the eMMC. (A plain microSD card has no RST\_n pin, so the pulse is a harmless no-op for card testing.)
+
+### Bus speed depends on your wiring
+
+The SDXC bus runs on repurposed **EPHY pads**, which are electrically marginal for high-speed SD/MMC to begin with. The **maximum reliable clock therefore depends on the physical wiring of your particular dev rig** — trace/wire length, connector quality, and pull-up strength all eat into the timing and signal-integrity margin.
+
+The clean bodybytes production PCB (short, soldered traces) runs at **48 MHz** High-Speed. A bench setup on **loose ~10 cm dupont jumper wires** does **not**: at 48 MHz it produces command-phase errors — sporadic `CMD_TMO`/`CMD_EIO` (never data-phase), escalating under load into `Card stuck being busy!` and hard `I/O error … (READ)` / `recovery failed!`. That command-only failure signature points squarely at the **CMD line's** signal/timing margin (long unshielded wires, weak/absent pull-ups), not the data lines.
+
+The fix is to **lower `max-frequency`** in both device trees — they must match, since U-Boot loads the FIT and Linux runs the OS off the same bus:
+
+| Where | File | Knob |
+|-------|------|------|
+| U-Boot | `arch/mips/dts/bodybytes,bodybytes.dts` | `max-frequency` |
+| OpenWrt | `target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dtsi` | `max-frequency` (main + recovery inherit it) |
+
+**26 MHz** cleared it on the 10 cm dupont rig. 26 was chosen deliberately over ≤25 MHz: the driver only enables its rising-edge high-speed response sampling **above 25 MHz** (see [uboot.md §MSDC driver fix](uboot.md#msdc-driver-fix)), so 26 keeps the same known-good sampling regime while halving the clock and peak current. If it's still marginal, go lower, shorten the wires, or stiffen the CMD/DAT pull-ups (10 kΩ) and VCC/VCCQ decoupling. The soldered production board can stay at 48 MHz — this is a dev-rig accommodation.
 
 ### eMMC manufacturing from PC
 
