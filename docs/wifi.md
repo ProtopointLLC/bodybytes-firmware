@@ -1,10 +1,10 @@
 # WiFi EEPROM - MT7628AN
 
-The MT7628AN WiFi subsystem has a dedicated on-chip MCU for RF control: TX power ramping, TSSI temperature compensation, crystal trim, and LNA configuration. These parameters are board- and silicon-specific, so they are stored in a 512-byte EEPROM blob that the driver loads at probe time.
+The MT7628AN WiFi subsystem has a dedicated on-chip MCU for RF control (TX power ramping, TSSI temperature compensation, crystal trim, LNA configuration). These parameters are board- and silicon-specific and are stored in a 512-byte EEPROM blob the driver loads at probe time.
 
-There is no physical EEPROM IC — the blob lives in the `factory` NOR partition, declared as an NVMEM cell in the device tree. `flash_nor_images.py` builds it on the fly from `config.ini` and `scripts/lib/wifi.py` (`build_factory()`), then writes it at the offset given by the DTB partition table.
+There is no physical EEPROM IC — the blob lives in the `factory` NOR partition, declared as an NVMEM cell in the device tree. [`flash_nor_images.py`](../scripts/flash_nor_images.py) builds it on the fly from [`scripts/config.ini`](../scripts/config.ini) and [`scripts/lib/wifi.py`](../scripts/lib/wifi.py) (`build_factory()`) and writes it at the partition offset.
 
-At probe the driver reads the blob from NVMEM, optionally overwrites four bytes from on-chip OTP (see eFuse merge below), then forwards the offsets in `req_fields[]` (`mt7603/mcu.c`) to the MCU via `MT_CMD_LOAD_CR`. The **MCU** column: `Y` = in `req_fields[]`; **N** = consumed by the host driver only.
+At probe the driver reads the blob from NVMEM, optionally overwrites four bytes from on-chip OTP (see eFuse merge below), then forwards `req_fields[]` entries to the MCU via `MT_CMD_LOAD_CR`. The **MCU** column: `Y` = in `req_fields[]`; **N** = consumed by the host driver only.
 
 ### eFuse merge
 
@@ -163,7 +163,7 @@ The bodybytes board uses the **Antenova Serica SR4W035** — a 2.4 GHz SMD chip 
 
 1. Flash the factory blob and verify association on CH6 (mid-band) — confirms the EEPROM structure is accepted by the driver.
 
-2. Connect a power sensor to the matching-circuit test point and measure conducted TX power at 54 Mbps. `TX0_POWER` is the target in dBm at 54 Mbps (§ 2.15). Adjust `wifi_tx0_power` until the level meets the budget (regulatory EIRP − SR4W035 average gain − trace/matching loss). Confirm `wifi_tx0_pa_tssi_msb` ≠ `0xFF` — the driver treats `0xFF` as an invalid TSSI sentinel and silently disables TSSI feedback. Then set `wifi_nic_confg_1 = 00 20` to enable TSSI_COMP closed-loop regulation to this calibrated target.
+2. Connect a power sensor and measure conducted TX power at 54 Mbps. Adjust `wifi_tx0_power` until it meets the budget (regulatory EIRP − SR4W035 gain − trace/matching loss). Confirm `wifi_tx0_pa_tssi_msb` ≠ `0xFF` — the driver treats `0xFF` as an invalid TSSI sentinel and silently disables TSSI feedback. Then set `wifi_nic_confg_1 = 00 20` to enable TSSI_COMP.
 
 3. Sweep CH1, CH6, CH11, CH14 and record power deviation from the CH6 reference. For any group outside ±1 dB, update the corresponding channel-offset register (`wifi_tx0_pwr_ofst_l/m/h`). Field encoding: `bit[7]=EN, bit[6]=INC (0=decrease, 1=increase), bits[5:0]=delta`; 1 step ≈ 0.5 dBm. Examples: `0x83`=−1.5 dB, `0x80`=0 dB, `0xC3`=+1.5 dB.
 

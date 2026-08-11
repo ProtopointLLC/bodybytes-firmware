@@ -28,7 +28,7 @@ The default MT7628 config uses UART0. One Kconfig change is needed.
 
 The SPL serial driver also requires `CFG_SYS_NS16550_COM3` (UART2's MMIO address, `0xb0000e00`), defined in [`u-boot/include/configs/bodybytes.h`](../u-boot/include/configs/bodybytes.h). This is why [`u-boot/include/configs/bodybytes.h`](../u-boot/include/configs/bodybytes.h) exists at all.
 
-**Why [`u-boot/include/configs/bodybytes.h`](../u-boot/include/configs/bodybytes.h) is necessary:** `serial_mtk.c` has two codepaths gated on `CONFIG_IS_ENABLED(DM_SERIAL)`. U-Boot proper has `CONFIG_DM_SERIAL=y` and takes the DM path - it gets the UART base address from the DTS `uart2@e00` node, so no `CFG_SYS_NS16550_COM*` is needed there. The SPL has `CONFIG_SPL_DM=y` but `CONFIG_SPL_DM_SERIAL` is **not** set. `CONFIG_IS_ENABLED(DM_SERIAL)` in an SPL build resolves to `CONFIG_SPL_DM_SERIAL` (not `CONFIG_DM_SERIAL`), so the SPL serial driver takes the legacy non-DM path, which uses a static struct initialized directly from `CFG_SYS_NS16550_COM##port`. There is a hard `#error` in that path if `CONS_INDEX == 3` and `CFG_SYS_NS16550_COM3` is not defined. `mt7628.h` only defines `COM1` (UART0 at `0xb0000c00`); [`u-boot/include/configs/bodybytes.h`](../u-boot/include/configs/bodybytes.h) adds `COM3` for UART2. Without [`u-boot/include/configs/bodybytes.h`](../u-boot/include/configs/bodybytes.h) the SPL build fails at compile time. There is no Kconfig symbol for the UART MMIO address, so the `#define` in the header is the only option.
+**Why [`u-boot/include/configs/bodybytes.h`](../u-boot/include/configs/bodybytes.h) is necessary:** `serial_mtk.c` has two codepaths gated on `CONFIG_IS_ENABLED(DM_SERIAL)`. U-Boot proper has `CONFIG_DM_SERIAL=y` and gets the UART address from the DTS — no `CFG_SYS_NS16550_COM*` needed. The SPL has `CONFIG_SPL_DM=y` but not `CONFIG_SPL_DM_SERIAL`, so `CONFIG_IS_ENABLED(DM_SERIAL)` resolves false in SPL: the legacy non-DM path runs, uses `CFG_SYS_NS16550_COM##port`, and has a hard `#error` if `CONS_INDEX==3` and `COM3` is not defined. `mt7628.h` only defines `COM1`; `bodybytes.h` adds `COM3`. Without it the SPL build fails at compile time.
 
 `CONS_INDEX` is 1-based while the hardware names are 0-based, so UARTLITE**2** = index **3**:
 
@@ -49,9 +49,9 @@ The SPL serial driver also requires `CFG_SYS_NS16550_COM3` (UART2's MMIO address
 
 ### Boot variables
 
-The boot variables live in [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env). The U-Boot build system auto-detects that file and compiles it into `default_environment[]`. A blank or corrupt `u-boot-env` partition still boots correctly because U-Boot falls back to the compiled-in defaults. [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) passes the file directly to `mkenvimage` to generate the env partition - the same source file serves both purposes with no duplication. When changing a boot variable, edit only `bodybytes.env`.
+The boot variables live in [`bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env), compiled into `default_environment[]` by the build system and also used as `mkenvimage` input by [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) — single source, no duplication. A blank or corrupt env partition falls back to compiled-in defaults. When changing a boot variable, edit only `bodybytes.env`.
 
-The file begins with a block of layout variables (`bootlimit`, `dram_staging`, `dram_staging_max`, `gpio_recovery`, `mmc_dev`, `mmc_part`, `block_size`, `block_mask`, `sf_recovery`, `sf_recovery_max`) that parameterise all the boot commands below them, making it straightforward to adapt the env for different hardware without touching the boot logic.
+The file opens with layout variables (`bootlimit`, `dram_staging`, `dram_staging_max`, `gpio_recovery`, `mmc_dev`, `mmc_part`, `block_size`, `block_mask`, `sf_recovery`, `sf_recovery_max`) that parameterise all boot commands, making hardware adaptation straightforward.
 
 #### Boot menu
 
@@ -71,11 +71,11 @@ The menu is a manual override available when serial access is present. If the au
 
 #### `boot_selected` - hall-sensor dispatch
 
-`boot_selected` reads the TI DRV5032FCDBZT omnipolar hall-effect sensor on GPIO#14 (MDI_TP_P1, active-low, open-drain with board pull-up) to decide which boot path to take.
+`boot_selected` reads the hall-effect sensor (GPIO#14, MDI_TP_P1, active-low) to select the boot path.
 
-`gpio read recovery_state ${gpio_recovery}` reads the pin level into the environment variable `recovery_state` and returns success if the GPIO is accessible, failure otherwise. If the read fails (GPIO unavailable), the device falls back to NOR recovery unconditionally. If it succeeds, `recovery_state` is compared: `"0"` means the pin is low (magnet present, sensor asserted) → NOR recovery (`run boot_sf`); otherwise → normal eMMC boot with fallback (`run boot_auto`).
+`gpio read recovery_state ${gpio_recovery}` stores the pin level in `recovery_state`. If the read fails (GPIO unavailable), falls back to NOR recovery unconditionally. If it succeeds: `recovery_state == "0"` (magnet present) → `run boot_sf`; otherwise → `run boot_auto`.
 
-The correct `gpio read <varname> <pin>` syntax (storing the level in a variable and testing it explicitly) is used rather than `gpio read <pin>` alone, because the latter's exit code reflects the GPIO level, making it impossible to distinguish an asserted input from a command failure.
+`gpio read <varname> <pin>` is used (not `gpio read <pin>` alone) because the bare form's exit code reflects the GPIO level — impossible to distinguish an asserted input from a command failure.
 
 #### `boot_auto` - eMMC with fallback
 
@@ -99,7 +99,7 @@ The eMMC rootfs DTB carries `root=/dev/mmcblk0p2`. fstools mounts `rootfs_data` 
 
 `boot_sf` prints a header line, calls `fit_load_sf` to load the FIT image from NOR, then boots it: `echo "Booting NOR recovery FIT" && run fit_load_sf && bootm ${dram_staging}`.
 
-The image cannot be booted directly from the NOR memory-mapped window (KSEG1 at `0xBE000000`). The MT7628 SPI controller's XIP (execute/read-in-place) path uses 3-byte addressing, which is unreliable for a 64 MB flash that U-Boot has placed into 4-byte addressing mode via the Bank Address Register (`CONFIG_SPI_FLASH_BAR=y`). Additionally, `fdt_check_full()` inside `bootm` walks the FDT structure and fails against the memory-mapped window even for addresses within the first 16 MB. The solution is to copy the image to DRAM first using `sf read`, which goes through the SPI driver with correct BAR-aware addressing, then boot from DRAM.
+The image cannot be booted directly from the NOR memory-mapped window: the XIP path uses 3-byte addressing (unreliable for a 64 MB flash in 4-byte addressing mode), and `fdt_check_full()` inside `bootm` fails against the memory-mapped window regardless. `sf read` uses BAR-aware addressing through the SPI driver; the image is copied to DRAM first.
 
 `fit_load_sf` performs the actual NOR load. `sf probe` reinitialises the SPI controller before each load. The sequence is:
 
@@ -111,17 +111,15 @@ The image cannot be booted directly from the NOR memory-mapped window (KSEG1 at 
 
 #### `fit_get_size` - FIT header parser
 
-`fit_get_size` is a helper called by both loaders. It temporarily points the U-Boot FDT working pointer at `dram_staging` (where one block has already been read), calls `fdt header get fit_size totalsize` to extract the FIT's declared total size into `fit_size`, then restores the FDT pointer to `fdtcontroladdr` as a side-effect (using `;` so the restore does not affect the return value). `fdtcontroladdr` is U-Boot's live control FDT address, set before any env scripts run via `CONFIG_PREBOOT="fdt addr ${fdtcontroladdr}"`. It returns failure if the header is invalid, if `totalsize` cannot be read, or if `fit_size` is below 64 bytes or above `dram_staging_max`.
+`fit_get_size` is a helper called by both loaders. It points the FDT working pointer at `dram_staging` (where one block has already been read), calls `fdt header get fit_size totalsize` to extract the declared size, then restores the pointer to `fdtcontroladdr`. Returns failure if the header is invalid or `fit_size` is below 64 bytes or above `dram_staging_max`.
 
 ### Env partition pre-programming
 
-U-Boot has two env sources: the compiled-in `default_environment[]` array and the env partition in NOR flash (offset `0x040000`, 4 KB, CRC32-prefixed). When the env partition CRC is valid, U-Boot loads from flash exclusively - the compiled-in defaults are never consulted. This means all boot variables must be present in the partition from the first flash.
+When the env partition CRC is valid, U-Boot loads from flash exclusively — compiled-in defaults are never consulted. All boot variables must therefore be present in the partition from the first flash. [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) generates it via `mkenvimage`: 4-byte CRC32 header, null-terminated `key=value` pairs, 0xFF-padded to 4 KB. The env is valid from first power-up.
 
-[`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) generates the env partition on the fly: it passes [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env) directly to [`u-boot/tools/mkenvimage`](../u-boot/tools/mkenvimage), producing a correctly formatted binary - 4-byte CRC32 header, null-terminated `key=value` pairs, 0xFF padding to 4 KB. No patching of the source file is needed; all layout values are variables defined within the env itself. The env partition is valid from the very first power-up.
+The `u-boot-env` DTS partition has **no** `read-only;` in the **U-Boot** DTS — this is what allows `saveenv` to write it. The **OpenWrt** DTS marks it `read-only;`; `fw_setenv` needs `kmod-mtd-rw`. OpenWrt never writes to it for boot control — the bootcount mechanism uses SYSCTL MEMO2 instead (see [Boot counter](#boot-counter-failed-boot-recovery)). `fw_printenv` reads the env for diagnostics; `saveenv` at the U-Boot prompt restores compiled-in defaults to flash after an env-only erase.
 
-The `u-boot-env` DTS partition does **not** carry `read-only;` in the **U-Boot** DTS (unlike the `u-boot`, `factory`, and `recovery` partitions) — this is what allows U-Boot's `saveenv` to write it. The **OpenWrt Linux** DTS does mark it `read-only;`, so `fw_setenv` cannot write to it without first loading `kmod-mtd-rw`. Either way, OpenWrt never writes to it for boot control - the bootcount mechanism uses the SYSCTL MEMO2 register instead (see [Boot counter](#boot-counter-failed-boot-recovery)), avoiding NOR write wear on every boot. `bootlimit=3` and `altbootcmd` are fixed in both the compiled-in env and the pre-programmed NOR partition and never need to change. `fw_printenv` can read the env for diagnostics; `fw_setenv` can write it if needed. `saveenv` from the U-Boot interactive prompt also writes the partition.
-
-A blank or corrupt env partition falls back to the compiled-in defaults, so the device always boots. If the env partition is erased (e.g. by a U-Boot-only flash update), run `saveenv` at the U-Boot prompt to restore the compiled-in defaults to flash.
+A blank or corrupt env partition falls back to compiled-in defaults — the device always boots.
 
 ### Boot counter (failed-boot recovery)
 
@@ -137,21 +135,21 @@ The mechanism integrates with the sysupgrade flow (see [openwrt.md - Sysupgrade]
 
 | Step | Actor | Action |
 |------|-------|--------|
-| Before firmware write | `platform.sh` | `devmem 0x1000006c 32 0xB0010000` - reset MEMO2 to count=0 |
+| Before firmware write | [`platform.sh`](../openwrt/target/linux/ramips/mt76x8/base-files/lib/upgrade/platform.sh) | `devmem 0x1000006c 32 0xB0010000` - reset MEMO2 to count=0 |
 | Each U-Boot boot | `bootcount_inc()` | reads MEMO2, increments count, writes back; mirrors count to in-memory env (no NOR write) |
 | Limit exceeded | `bootcount_error()` | reads `bootlimit` from env (fixed at `3`); runs `altbootcmd` (`echo "Boot count: ${bootcount} / ${bootlimit} - limit exceeded"; run boot_sf`) |
-| Successful boot (runlevel 99) | `init.d/bootcount` | `devmem 0x1000006c 32 0xB0010000` - resets MEMO2 to count=0 |
+| Successful boot (runlevel 99) | [`init.d/bootcount`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/init.d/bootcount) | `devmem 0x1000006c 32 0xB0010000` - resets MEMO2 to count=0 |
 
 **Auto-recovery flow:**
 
 1. Sysupgrade writes `0xB0010000` to MEMO2 (count=0 with magic), burns the new kernel to GPT partition 1 (`kernel`), and burns the squashfs rootfs to GPT partition 2 (`rootfs`). No NOR write.
 2. On each U-Boot boot, `bootcount_inc()` reads MEMO2, increments the count, and writes it back. The count is also mirrored to the in-memory env (`env_set_ulong`), but `env_save()` is never called - no NOR write.
 3. `bootcount_error()` checks `count > bootlimit`. `bootlimit=3` is read from the env (fixed in the compiled-in default and the NOR env partition). If the limit is exceeded, U-Boot runs `altbootcmd` (which prints a message and runs `boot_sf`) instead of `bootcmd`, booting directly from NOR regardless of the hall sensor.
-4. If the new firmware boots successfully and reaches runlevel 99, `init.d/bootcount` writes `0xB0010000` to MEMO2, resetting the counter to zero. All subsequent boots increment from 0, so the limit is never triggered during normal operation.
+4. If the new firmware boots successfully and reaches runlevel 99, [`init.d/bootcount`](../openwrt/target/linux/ramips/mt76x8/base-files/etc/init.d/bootcount) writes `0xB0010000` to MEMO2, resetting the counter to zero. All subsequent boots increment from 0, so the limit is never triggered during normal operation.
 
-**Why BOOTCOUNT_GENERIC instead of BOOTCOUNT_ENV:** BOOTCOUNT_ENV would write `bootcount` to the NOR env partition via `fw_setenv` on every boot - this causes unnecessary NOR write wear. BOOTCOUNT_GENERIC stores the count in a SoC scratch register: no flash access at all, and the count is lost on power-off (exactly the right semantics - only consecutive failed attempts within a session are counted). The `bootlimit=3` value stays fixed in the env permanently.
+**Why BOOTCOUNT_GENERIC:** BOOTCOUNT_ENV would write `bootcount` to NOR on every boot — unnecessary wear. BOOTCOUNT_GENERIC stores the count in a SoC scratch register: no flash access, lost on power-off (right semantics — only consecutive failed attempts within a session count). `bootlimit=3` stays fixed in the env permanently.
 
-**Defconfig symbols:** `CONFIG_BOOTCOUNT_LIMIT=y`, `CONFIG_BOOTCOUNT_GENERIC=y`, `CONFIG_SYS_BOOTCOUNT_ADDR=0xb000006c`, `CONFIG_SYS_BOOTCOUNT_SINGLEWORD=y`, `CONFIG_SYS_BOOTCOUNT_LE=y`, `CONFIG_CMD_BOOTCOUNT=y`. `CONFIG_SYS_BOOTCOUNT_MAGIC` defaults to `0xB001C041` from the Kconfig when `BOOTCOUNT_GENERIC` is selected - no explicit definition is needed in [`u-boot/include/configs/bodybytes.h`](../u-boot/include/configs/bodybytes.h). The `gardena-smart-gateway-mt7688` board in the same U-Boot tree uses the identical register address on the same SoC and confirms this approach.
+**Defconfig symbols:** `CONFIG_BOOTCOUNT_LIMIT=y`, `CONFIG_BOOTCOUNT_GENERIC=y`, `CONFIG_SYS_BOOTCOUNT_ADDR=0xb000006c`, `CONFIG_SYS_BOOTCOUNT_SINGLEWORD=y`, `CONFIG_SYS_BOOTCOUNT_LE=y`, `CONFIG_CMD_BOOTCOUNT=y`. `CONFIG_SYS_BOOTCOUNT_MAGIC` defaults to `0xB001C041` from Kconfig — no explicit definition needed in `bodybytes.h`.
 
 ### eMMC support
 
@@ -170,7 +168,7 @@ The eMMC uses a GPT partition layout. Four additional options are set in [`u-boo
 
 ### MSDC driver fix
 
-The upstream `drivers/mmc/mtk-sd.c` shares one `msdc_init_hw()` across all MediaTek SoCs and writes values tuned for MT8173/MT7622 that are wrong for the MT7628 controller. The bodybytes tree carries a `mips_mt762x` flag (set on `mt7620_compat`, which MT7628 uses) that keeps the MT7628 hardware reset defaults instead — mirroring the OpenWrt kernel patches 831-01/02/03. Four writes are gated behind `if (!host->dev_comp->mips_mt762x)`:
+The upstream [`drivers/mmc/mtk-sd.c`](../u-boot/drivers/mmc/mtk-sd.c) shares one `msdc_init_hw()` across all MediaTek SoCs and writes values tuned for MT8173/MT7622 that are wrong for the MT7628 controller. The bodybytes tree carries a `mips_mt762x` flag (set on `mt7620_compat`, which MT7628 uses) that keeps the MT7628 hardware reset defaults instead — mirroring the OpenWrt kernel patches 831-01/02/03. Four writes are gated behind `if (!host->dev_comp->mips_mt762x)`:
 
 | Upstream write | Why it is wrong on MT7628 |
 |----------------|---------------------------|
@@ -195,15 +193,13 @@ Note: the MT7621 SPI controller is half-duplex and does not support quad or dual
 
 ### D-cache disabled
 
-**`CONFIG_MIPS_CACHE_DISABLE=y`** - all other MT7628 boards in the tree (mt7628_rfb, linkit-7688, and others) carry this flag; bodybytes follows the same pattern.
+**`CONFIG_MIPS_CACHE_DISABLE=y`** - all other MT7628 boards in the tree carry this; bodybytes follows suit. With `CONFIG_MIPS_CACHE_SETUP=y` + `CONFIG_MIPS_CACHE_DISABLE=y`, start code initialises the cache arrays (required on 24KEc to avoid tag parity faults) then immediately disables them. U-Boot runs fully uncached for its entire lifetime.
 
-With `CONFIG_MIPS_CACHE_SETUP=y` and `CONFIG_MIPS_CACHE_DISABLE=y` set together, the generic MIPS start code initialises the cache arrays (required on 24KEc to avoid tag parity faults) and then immediately disables them. U-Boot runs fully uncached for its entire lifetime.
+**Why this matters for JTAG flashing:** OpenOCD `load_image` writes binary data to DRAM via PRACC; `sf write` then reads that memory to program NOR. With D-cache enabled, stale lines could shadow JTAG's writes — `sf write` would silently program garbage. With cache disabled every load/store goes directly to DRAM.
 
-**Why this matters for JTAG flashing:** [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) loads a binary into DRAM via OpenOCD `load_image` (PRACC - the CPU executes the write through its virtual address space), then issues `sf write <addr>` from U-Boot to program NOR. Without cache disabled, the D-cache can hold stale lines over the physical DRAM that JTAG just wrote; `sf write` then reads those stale lines rather than the newly written data, silently programming garbage into NOR. With cache disabled, every load and store goes directly to DRAM - JTAG writes are immediately visible to U-Boot with no coherency step required.
+**Why this matters for kernel boot:** With cache enabled, dirty D-cache lines at the KSEG0 stack address alias into physical DRAM. Linux writes back the entire D-cache during early boot, corrupting whatever the kernel placed at that aliased address (typically the Device Tree) — manifesting as an unaligned-access trap in `__of_find_property`. Running U-Boot uncached eliminates this: no dirty lines accumulate.
 
-**Why this also matters for kernel boot stability:** With cache enabled and a stack at a hardcoded KSEG0 address above the physical RAM size (e.g. `0x89001F00` in the vendor U-Boot), MIPS KSEG0 aliasing means those dirty D-cache lines map to a physical address that wraps into real RAM - on a 128 MB device, `0x89001F00` → physical `0x09001F00` wraps to `0x01001F00`, which also maps to `0x81001F00`. During early boot, Linux writes back the entire D-cache; the stale lines for that aliased address corrupt whatever the kernel placed there - typically the Device Tree. The resulting panic manifests as an unaligned-access trap in `__of_find_property` before any drivers initialise. Running U-Boot fully uncached eliminates this class of failure: no dirty lines accumulate during the U-Boot lifetime, so there is nothing stale for Linux to flush.
-
-**Linux is unaffected.** The MIPS kernel unconditionally re-enables and re-configures the caches during early `cpu_probe` / `cpu_cache_init` before any driver or userspace code runs.
+**Linux is unaffected** — the kernel re-enables and re-configures the caches in `cpu_probe`/`cpu_cache_init` before any driver runs.
 
 ### DRAM initialization (SPL)
 
@@ -222,17 +218,17 @@ The MediaTek port resolves this with a cache-as-SRAM trick, driven by `SOC_MT762
 | 5 | `mips_cache_reset` | Full cache-tag re-initialization. Leaves CP0_CONFIG[K0] unchanged (uncached) |
 | 6 | `board_init_f` | `spl_init()`, serial init, then `board_init_r()` loads U-Boot proper from NOR via `spl_nor_get_uboot_base()` (first image after `__image_copy_end`, skipping an optional FDT blob) |
 
-**Why `CONFIG_SKIP_LOWLEVEL_INIT=y` does not break the SPL.** `CONFIG_IS_ENABLED(X)` in an SPL build resolves to `CONFIG_SPL_X` (not `CONFIG_X`). `CONFIG_SPL_SKIP_LOWLEVEL_INIT` is not set in the defconfig, so the macro evaluates to false inside SPL - `lowlevel_init` is called and DRAM is initialized. In U-Boot proper (non-SPL build) the macro resolves to `CONFIG_SKIP_LOWLEVEL_INIT=y`, so `lowlevel_init` is correctly skipped - DRAM is already up.
+**Why `CONFIG_SKIP_LOWLEVEL_INIT=y` does not break the SPL:** `CONFIG_IS_ENABLED(X)` in SPL resolves to `CONFIG_SPL_X`. `CONFIG_SPL_SKIP_LOWLEVEL_INIT` is not set, so `lowlevel_init` is called and DRAM is initialized in the SPL. In U-Boot proper it resolves to `CONFIG_SKIP_LOWLEVEL_INIT=y`, so `lowlevel_init` is correctly skipped — DRAM is already up.
 
-**DRAM type and size are fully auto-detected at runtime.** `mt7628_ddr_init()` reads `SYSCTL_SYSCFG0_REG` for DDR type and `SYSCTL_CHIP_REV_ID_REG` for the package ID (KN package forces DDR1), and `SYSCTL_CLKCFG0_REG` to choose between 160 MHz and 200 MHz timing tables. The timing tables in `ddr.c` cover DDR1 and DDR2 at both speeds in sizes from 8 MB to 256 MB. No board-specific DRAM configuration is required.
+**DRAM type and size are auto-detected at runtime.** `mt7628_ddr_init()` reads SYSCFG0 for DDR type, CHIP_REV_ID for package (KN forces DDR1), and CLKCFG0 for 160/200 MHz timing tables. No board-specific DRAM configuration is required.
 
 ### eMMC DTS
 
 The MT7628 RFB DTS configures the MMC node for a removable SD card. The bodybytes DTS adapts it for a soldered eMMC:
 
-**Pinctrl** - the RFB DTS uses `sd_router_mode`, which remaps `i2c`, `uart1`, `sdmode`, and other pin groups as GPIO to free them for routing chips. On bodybytes those peripherals are in use; their pin assignments must not change. `sd_iot_mode` (pre-defined in `mt7628a.dtsi`) sets `EPHY_APGIO_AIO_EN[4:1]=0xf` (MDI P1–P4 pads go digital), `SD_MODE=0` (SDXC signals on EPHY P3/P4 pads), and `ESD=0` (IoT routing). The SDXC data/cmd/clk lines emerge on the MDI P3/P4 pads exactly as the schematic wires them (SoC pins 51–57).
+**Pinctrl** - bodybytes uses `sd_iot_mode` (from `mt7628a.dtsi`), not the RFB's `sd_router_mode` (which remaps i2c/uart1/sdmode pins that bodybytes needs). `sd_iot_mode` sets `EPHY_AGPIO_AIO_EN[4:1]=0xf` (MDI P1–P4 pads digital), `SD_MODE=0` (SDXC on EPHY P3/P4), and `ESD=0`. SDXC signals emerge on MDI P3/P4 pads (SoC pins 51–57).
 
-**Pad pull-ups** - CMD and DAT0–3 must idle high in IoT mode. The board provides **external 10 kΩ pull-ups** on these lines, so no software pull-up state is used: `&mmc` applies `pinctrl-0 = <&sd_iot_mode>` alone. CLK (`sd_clk`) is a driven output and needs no pull-up. (The MSDC's own `PAD_CTRL` pull registers at 0x101300E0–E8 are inert on MT7628 — writes read back 0 — so pull-ups must be external or via the SYSC padconf; external is used.)
+**Pad pull-ups** - CMD and DAT0–3 must idle high in IoT mode; the board provides **external 10 kΩ pull-ups**. CLK is a driven output and needs no pull-up. (The MSDC `PAD_CTRL` registers at 0x101300E0–E8 are inert on MT7628 — writes read back 0 — pull-ups must be external.)
 
 **Response-sample edge** - `&mmc` sets `r_smpl = <0>` (RSPL falling edge), overriding the base `mt7628a.dtsi` default of `<1>`; this matches the vendor SDK. It only affects the low-speed init phase — above 25 MHz the driver forces the high-speed sample latches regardless (see [MSDC driver fix](#msdc-driver-fix)).
 
@@ -246,17 +242,14 @@ The MT7628 RFB DTS configures the MMC node for a removable SD card. The bodybyte
 
 ### EPHY bring-up — why Ethernet is enabled
 
-SD/eMMC in IoT mode runs on the EPHY P3/P4 MDI pads. Putting those pads in digital mode (`ephy4_1_pad = digital`, via `sd_iot_mode`) only routes the SDXC signals onto the pads — it does **not** initialise the EPHY analog front-end. Left uninitialised, the EPHY holds these pads in an abnormal idle state (DAT0 cannot idle high even with the external pull-ups), so the card never enumerates. The EPHY must be brought up: a reset pulse plus `mt7628_ephy_init()` (which includes an explicit *"Fix EPHY idle state abnormal behavior"* MDIO write).
+SD/eMMC in IoT mode runs on EPHY P3/P4 MDI pads. Setting those pads to digital mode (via `sd_iot_mode`) routes SDXC signals onto them but does **not** initialise the EPHY analog front-end. Left uninitialised, the EPHY holds the pads in an abnormal idle state (DAT0 cannot idle high even with external pull-ups) — the card never enumerates. The EPHY requires a reset pulse plus `mt7628_ephy_init()` (which applies an explicit *"Fix EPHY idle state abnormal behavior"* MDIO write).
 
-Upstream U-Boot's [`drivers/net/mt7628-eth.c`](../u-boot/drivers/net/mt7628-eth.c) performs exactly that bring-up in `rt305x_esw_init()`, and it runs at **driver probe** (not at first network use) — the same mechanism every MT7628 board and the vendor SDK rely on.
+[`drivers/net/mt7628-eth.c`](../u-boot/drivers/net/mt7628-eth.c) performs that bring-up in `rt305x_esw_init()` at **driver probe** (not at first network use). bodybytes has no Ethernet ports but enables the eth driver solely for this probe side effect:
 
-Bodybytes has no Ethernet ports, but the SD pads depend on that bring-up, so the eth driver is enabled solely for its probe side effect:
+- `bodybytes_defconfig`: `CONFIG_NET=y`, `CONFIG_MT7628_ETH=y`, `CONFIG_NET_RANDOM_ETHADDR=y`. `CONFIG_NET` implies `NETDEVICES`→`DM_ETH`; `MT7628_ETH` selects `PHYLIB`.
+- DTS: `&eth { status = "okay"; pinctrl-0 = <&ephy_iot_mode>; }`. No `mediatek,poll-link-phy`, so `phy_connect()` is skipped and probe completes without a cable. `ephy_iot_mode` keeps P1–P4 pads digital so the eth driver never reverts them to analog.
 
-- [`configs/bodybytes_defconfig`](../u-boot/configs/bodybytes_defconfig): `CONFIG_NET=y`, `CONFIG_MT7628_ETH=y`, `CONFIG_NET_RANDOM_ETHADDR=y` (replacing the former `CONFIG_NO_NET=y`). `CONFIG_NET` implies `NETDEVICES` → `DM_ETH`; `MT7628_ETH` selects `PHYLIB`.
-- `bodybytes,bodybytes.dts`: `&eth { status = "okay"; pinctrl-0 = <&ephy_iot_mode>; }`. No `mediatek,poll-link-phy`, so `phy_connect()` is skipped and probe completes with no cable attached. `ephy_iot_mode` keeps the P1–P4 pads digital so the eth driver never reverts them to analog.
-
-Boot path that triggers it with no network command:
-`initr_net` (gated on `CONFIG_NET`, **not** `CONFIG_CMD_NET`) → `eth_initialize()` → `uclass_first_device_check(UCLASS_ETH)` **probes** the device → `mt7628_eth_probe()` → `rt305x_esw_init()` → EPHY reset pulse + `mt7628_ephy_init()`.
+Boot path (no network command needed): `initr_net` (gated on `CONFIG_NET`, not `CONFIG_CMD_NET`) → `eth_initialize()` → `uclass_first_device_check(UCLASS_ETH)` probes → `mt7628_eth_probe()` → `rt305x_esw_init()` → EPHY reset + `mt7628_ephy_init()`.
 
 ### GPIO pin map (EPHY/MDI pads used as GPIO)
 

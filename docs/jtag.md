@@ -33,11 +33,11 @@ Reference: <https://kb.segger.com/9-pin_JTAG/SWD_connector>
 | 6         | Violet | TP15       | TDI         | NC             | 8          |
 | 7 (bot)   | White  | TP14       | TDO         | SWO            | 6          |
 
-J-Link pin 10 (nRESET) is not connected - bodybytes does not expose PORST\_N on the JTAG header.
+J-Link pin 10 (nRESET) is not connected — bodybytes does not expose PORST\_N on the JTAG header.
 
-VTref (TP21) is a sense input - connect it to the 3.3 V rail but do not use it to power the board.
+VTref (TP21) is a sense input — connect it to the 3.3 V rail but do not use it to power the board.
 
-The MT7628 JTAG pins are multiplexed with Ethernet LED functions. The board must be strapped for JTAG mode so these pins are routed to the EJTAG interface rather than LEDs.
+The JTAG pins are multiplexed with Ethernet LED functions; the board must be strapped for JTAG mode before connecting (see [§JTAG and SD/eMMC](#jtag-and-sdemmc-are-mutually-exclusive)).
 
 ## Reset Signals
 
@@ -47,15 +47,13 @@ Only JTRST\_N is connected to the JTAG header on bodybytes. PORST\_N (system res
 |--------|-----------|------------|----------------|
 | TRST (nTRST) | `JTAG_TRST` / `JTRST_N` | 9 | JTAG/EJTAG TAP and debug logic only |
 
-TRST resets the JTAG TAP state machine and debug logic only - it does not reset the CPU or peripherals. Without PORST\_N, OpenOCD cannot force a clean CPU reset. Connect after power-on and use `halt` to stop the running CPU.
-
-The OpenOCD reset configuration for bodybytes:
+TRST resets only the TAP — not the CPU or peripherals. Without PORST\_N, connect after power-on and use `halt` to stop the CPU.
 
 ```tcl
 reset_config trst_only
 ```
 
-With `trst_only`, OpenOCD resets only the TAP when `reset` is issued. The CPU is not affected. Use `halt` (not `reset halt`) to stop the CPU after `init`.
+With `trst_only`, `reset` affects only the TAP. Use `halt` (not `reset halt`) after `init`.
 
 ---
 
@@ -68,9 +66,9 @@ With `trst_only`, OpenOCD resets only the TAP when `reset` is issued. The CPU is
 | high (pull-up)  | 1 | Normal — the five `EPHY_LED` pins are Ethernet LEDs, **JTAG disabled** |
 | low (pull-down) | 0 | **JTAG enabled** — those pins become `TMS`/`TCK`/`TDI`/`TDO`/`TRST` |
 
-The catch: on this SoC the SD/eMMC (SDXC) controller is muxed onto the **EPHY (Ethernet-PHY) pads** ("IoT" mode). Enabling JTAG **breaks the SD/eMMC bus** — the CMD line stops responding, so every command reads back all-zero and the card never enumerates (Linux loops on `no support for card's volts`; U-Boot's `mmc rescan` fails silently).
+The catch: SD/eMMC (SDXC) runs on the **EPHY pads** ("IoT" mode). Enabling JTAG **breaks the SD/eMMC bus** — CMD stops responding and the card never enumerates.
 
-This is a **hardware** mutual-exclusion, not a software setting: it is latched into a read-only bit at reset, and every *writable* pin-mux register is identical in both modes (measured — `GPIO1_MODE`, `AGPIO_CFG`, `GPIO2_MODE` all byte-identical whether the strap is high or low). There is no register to flip at runtime to get both at once. **You cannot debug the CPU over JTAG and use SD/eMMC in the same boot.**
+This is a **hardware** mutual-exclusion: latched at reset into a read-only bit, with no software workaround. **You cannot use JTAG and SD/eMMC in the same boot.**
 
 ### Why: the SD bus doubles as the Andes JTAG
 
@@ -121,7 +119,7 @@ scripts/start_openocd_jlink.py --bodybytes
 
 `trst_only` - bodybytes has no PORST\_N on the JTAG connector. OpenOCD can reset the TAP (JTRST\_N) but not the SoC. Power the board first, then connect OpenOCD. `halt` sends a debug request to the running CPU rather than forcing it to a clean reset entry point.
 
-The script reads `reset_config` and `halt_cmd` from the board profile in `scripts/config.ini` (`[board:bodybytes]`: `trst_only` / `halt`), issues the halt command after `init`, and waits up to 5 s for the CPU to halt. Ctrl-C terminates OpenOCD directly.
+The script reads `reset_config` and `halt_cmd` from the board profile in [`scripts/config.ini`](../scripts/config.ini) (`[board:bodybytes]`: `trst_only` / `halt`), issues the halt command after `init`, and waits up to 5 s for the CPU to halt. Ctrl-C terminates OpenOCD directly.
 
 Expected output:
 
@@ -164,7 +162,7 @@ pc (/32): 0x9c...    (somewhere in NOR or RAM, depending on where boot reached)
 0x10000000: 3637544d
 ```
 
-Without PORST\_N, `halt` catches the CPU wherever it was executing - mid-U-Boot, mid-SPL, or in the BROM. The PC value is unpredictable but `mdw 0x10000000` should always read `0x3637544d` ("MT76") confirming the SoC is alive. Proceed with `cpu_pll_init` and `dram_init 256` regardless of where the CPU halted - those scripts are idempotent.
+Without PORST\_N, `halt` catches the CPU mid-execution — the PC is unpredictable. `mdw 0x10000000` should always return `0x3637544d` ("MT76") confirming the SoC is alive. The PLL/DRAM scripts are idempotent; proceed regardless of where the CPU halted.
 
 ---
 
@@ -182,10 +180,10 @@ The script performs the full sequence automatically:
 2. Reads `0x10000000` and confirms the MT7628 chip ID (`0x3637544d`); aborts if it does not match
 3. Runs `cpu_pll_init` - locks the PLL to the 40 MHz crystal, sets CPU to 580 MHz
 4. Raises adapter speed to 1000 kHz
-5. Runs `dram_init` with `dram_size_mb` from the board profile (`[board:bodybytes]` in `scripts/config.ini`)
+5. Runs `dram_init` with `dram_size_mb` from the board profile (`[board:bodybytes]` in [`scripts/config.ini`](../scripts/config.ini))
 6. Configures the OpenOCD work area at `0xa0001000` for fast bulk transfers
-7. Writes and reads back `0xdeadbeef` at `staging_addr` (`0x81000000` from `[jtag]` in `scripts/config.ini`) to verify DRAM
-8. Loads `u-boot/u-boot.bin` to `uboot_ram_addr` (`0x80200000`) via `load_image`
+7. Writes and reads back `0xdeadbeef` at `staging_addr` (`0x81000000` from `[jtag]` in [`scripts/config.ini`](../scripts/config.ini)) to verify DRAM
+8. Loads [`u-boot/u-boot.bin`](../u-boot/u-boot.bin) to `uboot_ram_addr` (`0x80200000`) via `load_image`
 9. Sets PC to `0x80200000` and resumes; then opens serial (`/dev/ttyUSB0`), interrupts U-Boot autoboot, and confirms the prompt with `version`
 
 All steps are logged with timestamps. The script exits with an error if any step fails.
@@ -224,3 +222,17 @@ Continue with [flashing.md §4b](flashing.md#4b--full-nor-programming-first-time
 See [flashing.md §1a](flashing.md#1a--partition-map) for the full NOR partition map and [flashing.md §5a](flashing.md#5a--gpt-partition-layout) for the eMMC GPT layout.
 
 SPI NOR is at physical `0x1c000000`, accessible to the CPU at `0x9c000000` (KSEG0 cached) or `0xbc000000` (KSEG1 uncached). Use `0xbc000000 + <nor_offset>` for direct JTAG memory reads (e.g. `mdw 0xbc050000 4` to read the first 16 bytes of the factory partition).
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+|---------|-------------|
+| `JTAG tap: ... UNEXPECTED` | Wrong IDCODE — check target config and TDI/TDO wiring |
+| `Timed out waiting for device to appear` | VTref missing or target unpowered |
+| `Error: JTAG scan chain interrogation failed` | TCK/TMS/TDO wiring, target power, or reset state |
+| `tap: mt7628.cpu enabled (idcode 0x00000000)` | TDO open, target unpowered, or TAP held in reset |
+| `halt` times out | JTAG mode not strapped (TXD1 must be low), or EPHY LED pins not muxed to JTAG |
+| `targets` shows `running` after clean halt | GDB/IDE resume, external reset, or watchdog |
+| PC stuck at `0x9c000000` after resume | CPU not progressing — check clock, SPI flash activity, and boot straps |

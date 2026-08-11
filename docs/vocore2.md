@@ -114,7 +114,7 @@ Once OpenOCD is running and listening on port 4444, run the full init + U-Boot l
 scripts/boot_uboot_jtag.py --vocore2
 ```
 
-This automates PLL init, `dram_init` (size from `dram_size_mb` in `[board:vocore2]` in `scripts/config.ini` — 128 MB), DRAM test, and loading [`u-boot/u-boot.bin`](../u-boot/u-boot.bin) to `0x80200000` via JTAG. U-Boot output appears on the serial adapter connected to P2TP/P2TN.
+This automates PLL init, `dram_init` (size from `dram_size_mb` in `[board:vocore2]` in [`scripts/config.ini`](../scripts/config.ini) — 128 MB), DRAM test, and loading [`u-boot/u-boot.bin`](../u-boot/u-boot.bin) to `0x80200000` via JTAG. U-Boot output appears on the serial adapter connected to P2TP/P2TN.
 
 ---
 
@@ -178,16 +178,16 @@ The Hardkernel reader board has a small pull-up resistor **R1** on RST\_n. RST\_
 
 ### Bus speed depends on your wiring
 
-The SDXC bus runs on repurposed **EPHY pads**, which are electrically marginal for high-speed SD/MMC to begin with. The **maximum reliable clock therefore depends on the physical wiring of your particular dev rig** — trace/wire length, connector quality, and pull-up strength all eat into the timing and signal-integrity margin.
+The SDXC bus runs on repurposed **EPHY pads**, which are electrically marginal for high-speed SD/MMC. The **maximum reliable clock depends on your dev rig's wiring** — wire length, connector quality, and pull-up strength all eat into timing margin.
 
-The clean bodybytes production PCB (short, soldered traces) runs at **48 MHz** High-Speed. A bench setup on **loose ~10 cm dupont jumper wires** does **not**: at 48 MHz it produces command-phase errors — sporadic `CMD_TMO`/`CMD_EIO` (never data-phase), escalating under load into `Card stuck being busy!` and hard `I/O error … (READ)` / `recovery failed!`. That command-only failure signature points squarely at the **CMD line's** signal/timing margin (long unshielded wires, weak/absent pull-ups), not the data lines.
+The bodybytes production PCB (short soldered traces) runs at **48 MHz**. A bench setup on loose ~10 cm dupont jumper wires does not: at 48 MHz command-phase errors appear (`CMD_TMO`/`CMD_EIO`), escalating under load to `Card stuck being busy!` and `I/O error`.
 
 The fix is to **lower `max-frequency`** in both device trees — they must match, since U-Boot loads the FIT and Linux runs the OS off the same bus:
 
 | Where | File | Knob |
 |-------|------|------|
-| U-Boot | `arch/mips/dts/bodybytes,bodybytes.dts` | `max-frequency` |
-| OpenWrt | `target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dtsi` | `max-frequency` (main + recovery inherit it) |
+| U-Boot | [`arch/mips/dts/bodybytes,bodybytes.dts`](../u-boot/arch/mips/dts/bodybytes,bodybytes.dts) | `max-frequency` |
+| OpenWrt | [`target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dtsi`](../openwrt/target/linux/ramips/dts/mt7628an_bodybytes_bodybytes.dtsi) | `max-frequency` (main + recovery inherit it) |
 
 **26 MHz** cleared it on the 10 cm dupont rig. 26 was chosen deliberately over ≤25 MHz: the driver only enables its rising-edge high-speed response sampling **above 25 MHz** (see [uboot.md §MSDC driver fix](uboot.md#msdc-driver-fix)), so 26 keeps the same known-good sampling regime while halving the clock and peak current. If it's still marginal, go lower, shorten the wires, or stiffen the CMD/DAT pull-ups (10 kΩ) and VCC/VCCQ decoupling. The soldered production board can stay at 48 MHz — this is a dev-rig accommodation.
 
@@ -212,7 +212,7 @@ sync
 
 ## NOR Flash
 
-VoCore2 uses a Winbond W25Q256FV: 32 MB total, 256-byte page size, 64 KB erase block size. The 64 KB block size matches `CONFIG_ENV_SECT_SIZE=0x10000` exactly - U-Boot's `saveenv` erases one block, and `fw_setenv` issues an erase ioctl for `secsize=0x10000`; both are correct for this chip. The partition offsets (u-boot at `0x0`, u-boot-env at `0x40000`, factory at `0x50000`, recovery at `0x60000`) are identical to bodybytes; only the total NOR size and the recovery partition end differ. The board profile `[board:vocore2]` in `scripts/config.ini` has `nor_total_size_mb = 32` and `nor_chip_name = W25Q256FV` — `flash_nor_images.py --vocore2 --file` then produces a 32 MB image with the recovery partition capped at `0x1FA0000` (31.625 MB) instead of 63.625 MB. The actual recovery kernel is far smaller than either limit.
+VoCore2 uses a Winbond W25Q256FV (32 MB, 64 KB erase blocks). Partition offsets (`u-boot` at `0x0`, `u-boot-env` at `0x40000`, `factory` at `0x50000`, `recovery` at `0x60000`) are identical to bodybytes; only total size and recovery end differ. `[board:vocore2]` in [`scripts/config.ini`](../scripts/config.ini) sets `nor_total_size_mb = 32` and `nor_chip_name = W25Q256FV` — `flash_nor_images.py --vocore2 --file` produces a 32 MB image with recovery capped at `0x1FA0000` (31.625 MB).
 
 ### Factory EEPROM comparison
 
@@ -241,11 +241,11 @@ The MT7628AN latches `CHIP_MODE[2:0]` from `{SPI_CS1, SPI_CLK, SPI_MOSI}` at res
 
 **VoCore2 strapping** selects 3-byte mode. VoCore2 shipped historically with a 16 MB W25Q128FV; later production runs changed to the W25Q256FV (32 MB) without updating the strapping resistors. The recovery partition starts at offset `0x60000`, leaving ~15.6 MB of usable XIP-readable space before the 16 MB address wrap at `0xFFFFFF`. Recovery images that fit within that range boot correctly via `bootm 0xBC060000`; images larger than ~15.6 MB return corrupt data from XIP.
 
-**Bodybytes strapping**: `SPI_CS1` = high, `SPI_CLK` = high, `SPI_MOSI` = floating. MOSI is wired directly to the W25Q512JV SI pin, which is high-impedance when CS is deasserted, so `CHIP_MODE[0]` at reset is determined only by PCB pull resistors. In practice the effective mode is also 3-byte, giving the same 16 MB XIP window - but the bodybytes chip is a W25Q512JV (64 MB), so any recovery image larger than ~15.6 MB would read garbage via XIP. The floating strapping is a hardware design issue; a future board revision should add an explicit pull resistor to lock `CHIP_MODE[0]` to a known state.
+**Bodybytes strapping**: `SPI_CS1` = high, `SPI_CLK` = high, `SPI_MOSI` = floating (MOSI is wired directly to the W25Q512JV SI pin, high-impedance when CS is deasserted). Effective mode is also 3-byte — same 16 MB XIP window on a 64 MB chip. A future revision should add a pull resistor to lock `CHIP_MODE[0]`.
 
 **The fix**: never boot from the XIP window directly. `boot_sf` → `fit_load_sf` copies the kernel to RAM first: `sf probe` triggers EN4B (command `0xB7`), switching the flash to 4-byte mode; `fit_load_sf` then uses the SPI driver — not the XIP window — doing a two-pass read (one block for the FIT header to determine image size, then the full image into `${dram_staging}`). See [flashing.md §6b](flashing.md#6b---bootcmd) for the full env variable reference.
 
-**OpenWRT MTD note:** The OpenWRT DTS defines the `recovery` partition with size `0x3FA0000` (63.625 MB), which extends to the 64 MB boundary. On VoCore2 the kernel spi-nor driver detects the W25Q256 as 32 MB, so the MTD layer rejects or truncates the `recovery` partition with a warning. The `u-boot`, `u-boot-env`, and `factory` partitions (all within the first 384 KB) register correctly. The truncated `recovery` MTD is harmless in practice: OpenWRT never writes to it (it is `read-only` in the DTS and is only ever written by U-Boot via `sf`), and `fw_setenv`/`fw_printenv` use `u-boot-env` which is unaffected.
+**OpenWRT MTD note:** The DTS defines `recovery` at 63.625 MB; on VoCore2 the spi-nor driver detects 32 MB and the MTD layer truncates `recovery` with a warning. The first three partitions (all within the first 384 KB) register correctly. The truncated `recovery` MTD is harmless — OpenWRT never writes to it, and `fw_setenv`/`fw_printenv` use `u-boot-env` which is unaffected.
 
 ### Recovery testing on VoCore2
 
@@ -373,11 +373,11 @@ The write command erases each 64 KB block before programming and verifies the re
 
 ## WiFi EEPROM calibration
 
-The VoCore2 stock firmware ships the module as 1T1R (`NIC_CONFG_0 = 0x11`): WF0 drives the on-board ceramic SMT antenna, WF1 goes to a U.FL connector. The bodybytes firmware uses the same 1T1R setting since VoCore2 is used as a development proxy — if you want 2T2R for range testing, apply the vendor `ant2.sh` patch which changes byte[0] to `0x22` without touching any other calibration field. TSSI temperature compensation (`NIC_CONFG_1 bit13`) is enabled because VoCore2 has a fully factory-calibrated chip with a known-good `TX0_POWER` ceiling of 30 dBm at 54 Mbps; the TSSI loop keeps output stable as the module heats up. Per-channel flatness offsets (CH1–5 / CH6–10 / CH11–14) and per-rate back-offs are set from the NOR backup and taper the higher OFDM and HT rates to 0 dBm relative to the TX0_POWER baseline. Crystal calibration uses `XTAL_TRIM2 = 0x8E` (+14 cap steps), a VoCore2 PCB-specific re-trim on top of the eFuse `XTAL_CAL` value the driver loads at every probe. The four eFuse-placeholder fields (`TEMP_SEN_CAL`, `efuse_cp_ft_version`, `XTAL_CAL`, `efuse_xtal_wf_rfcal`) are not written to the NOR image — the driver unconditionally overwrites them from on-chip OTP at probe time regardless of the NOR value, so setting them is redundant. The undocumented MCU blobs (`eeprom_0xf8`, `eeprom_0x12e`, `eeprom_0xe0`, `eeprom_0x130`, `eeprom_0x144`) are observed in the NOR dump but their purpose is unknown; they are omitted from the build until their function is confirmed.
+VoCore2 stock firmware ships as 1T1R (`NIC_CONFG_0 = 0x11`): WF0 on the ceramic SMT antenna, WF1 on the U.FL connector. The bodybytes firmware keeps the same 1T1R setting; apply the vendor `ant2.sh` patch (byte[0] → `0x22`) for 2T2R. TSSI temperature compensation (`NIC_CONFG_1 bit13`) is enabled — VoCore2 has a factory-calibrated chip with `TX0_POWER = 30 dBm` at 54 Mbps; the TSSI loop keeps output stable as the module heats up. Per-channel flatness offsets and per-rate back-offs are taken from the NOR backup and taper higher OFDM/HT rates to 0 dBm relative to `TX0_POWER`. Crystal calibration uses `XTAL_TRIM2 = 0x8E` (+14 cap steps) as a VoCore2 PCB-specific re-trim on top of the eFuse `XTAL_CAL`. The four eFuse-placeholder fields (`TEMP_SEN_CAL`, `efuse_cp_ft_version`, `XTAL_CAL`, `efuse_xtal_wf_rfcal`) are omitted — the driver overwrites them from on-chip OTP at every probe. Undocumented MCU blobs (`eeprom_0xf8`, `eeprom_0x12e`, `eeprom_0xe0`, `eeprom_0x130`, `eeprom_0x144`) are observed in the NOR dump but purpose unknown; omitted until confirmed.
 
 See [wifi.md §Register map](wifi.md#register-map) for full register details (offset, width, type, DS, eFuse, MCU columns) and the bodybytes configuration profile.
 
-Active values set in `[board:vocore2]` in `scripts/config.ini`:
+Active values set in `[board:vocore2]` in [`scripts/config.ini`](../scripts/config.ini):
 
 | `config.ini` key | VoCore2 | Notes |
 | ---------------- | -----: | ----- |

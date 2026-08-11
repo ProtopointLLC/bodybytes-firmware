@@ -40,7 +40,7 @@ make -j$(nproc)
 | [`u-boot/spl/u-boot-spl.bin`](../u-boot/spl/u-boot-spl.bin) | SPL; runs from NOR flash, initialises PLL+DRAM, then loads and jumps to U-Boot proper. |
 | [`u-boot/u-boot-with-spl.bin`](../u-boot/u-boot-with-spl.bin) | Combined NOR image: SPL immediately followed by LZMA-compressed U-Boot. Write to NOR offset 0. |
 
-`CONFIG_SKIP_LOWLEVEL_INIT=y` is set, so `u-boot.bin` expects PLL and DRAM already initialised - exactly what the JTAG OpenOCD scripts provide for RAM boot.
+`u-boot.bin` expects PLL and DRAM already initialised (`CONFIG_SKIP_LOWLEVEL_INIT=y`) — the JTAG scripts provide this for RAM boot.
 
 ### VS Code tasks
 
@@ -50,8 +50,6 @@ make -j$(nproc)
 | _**U-Boot: Clean Build**_ | `make mrproper && make bodybytes_defconfig && make -j$(nproc)` | Full wipe when the build is stuck or after major restructuring |
 
 Both tasks run inside `nix develop .#uboot` automatically — no manual shell entry required.
-
-`make bodybytes_defconfig` is always run before `make` so that edits to `configs/bodybytes_defconfig` are always applied. DTS source changes are picked up by Make's timestamp-based dependency tracking.
 
 → See [flashing.md §4](flashing.md#4--program-spi-nor) for NOR programming.
 
@@ -70,7 +68,7 @@ cd /path/to/bodybytes
 nix develop .#openwrt
 ```
 
-Drops into a `buildFHSEnv` shell with all required host tools, without setting any cross-compilation variables. Also sets `AR=gcc-ar` (LTO-aware archiver for host builds) and `FAKEROOTDONTTRYCHOWN=1` (works around a fakeroot/bwrap user-namespace limitation that would otherwise produce ownership warnings during image assembly).
+Enters a `buildFHSEnv` shell with all required host tools (no cross-compilation variables set). Sets `AR=gcc-ar` (LTO-aware archiver) and `FAKEROOTDONTTRYCHOWN=1` (suppresses fakeroot ownership warnings during image assembly).
 
 ### Feeds
 
@@ -87,7 +85,7 @@ cp ../bodybytes.config .config
 make defconfig
 ```
 
-[`bodybytes.config`](../bodybytes.config) seeds the target/board selection and board-specific Kconfig options. `CONFIG_TARGET_MULTI_PROFILE=y` is the critical build flag: without it the two device profiles (`bodybytes_bodybytes` and `bodybytes_bodybytes_recovery`) live in a Kconfig `choice` block and only the last one set is built. `make defconfig` expands the seed into a full `.config`. To add or change packages, run `make menuconfig` afterwards. See [openwrt.md §1](openwrt.md#1---board-files) for the full rationale behind each config symbol.
+[`bodybytes.config`](../bodybytes.config) seeds the target/board selection and board-specific Kconfig options; `make defconfig` expands it to a full `.config`. `CONFIG_TARGET_MULTI_PROFILE=y` is required — without it only one of the two device profiles is built. Run `make menuconfig` to add or change packages. See [openwrt.md §1](openwrt.md#1---board-files) for config symbol rationale.
 
 ### Build
 
