@@ -94,16 +94,11 @@ The overlap is in the datasheet register fields — two independent JTAG-vs-stor
 - **`GPIO1_MODE` (`0x10000060`) bits [11:10] `SD_MODE`** — "SDXC GPIO mode: `0: SDXC`, `1: GPIO`, `2: UTIF`, **`3: Andes JTAG`**". The SDXC data pins *are* an alternate for the **Andes JTAG** interface — the same silicon.
 - **`AGPIO_CFG` (`0x1000003C`) bits [20:17] `EPHY_GPIO_AIO_EN`** — selects EPHY P1–P4 as digital PADs (reset = digital); this is what routes SDXC onto the EPHY pads in the first place.
 
-So the MIPS JTAG shares the **EPHY_LED** pins (where the J-Link connects), the **Andes JTAG shares the SD data pins** (`SD_MODE=3`), and `DBG_JTAG_MODE` enables both at once. Be precise about how much of this the datasheet actually proves:
-
-- **Confirmed (datasheet):** the *sharing*. `SD_MODE = 3 = Andes JTAG` is a literal register-field value — those pins are designed to be either SDXC or the Andes debug interface. (Only the field description states it; the SD pin-share table tabulates just the `SDXC` and `GPIO` columns, so there is no per-pin JTAG-signal map.)
-- **Inferred (measured, not documented):** the *runtime break*. With JTAG strapped on, `SD_MODE` still reads `0`/SDXC — the pins are **not** re-muxed to Andes JTAG — yet SD fails anyway. So the disturbance happens **below the mux**, in the shared debug/analog state the strap creates. That is why every writable register is identical in both modes and none of them undoes it, and why **time-sharing is the only option** (§ workflow below).
-
-Net: the datasheet confirms the SD bus and the Andes debug interface are the same silicon, but stops short of explaining why enabling `DBG_JTAG_MODE` kills the bus while the mux still points at SDXC. This conflict is called out as a warning nowhere — in the datasheet or in vendor/OpenWrt docs — the register fields above are its only trace.
+So the MIPS JTAG shares the **EPHY_LED** pins (where the J-Link connects), the **Andes JTAG shares the SD data pins** (`SD_MODE=3`), and `DBG_JTAG_MODE` enables both at once. The disturbance happens below the mux layer — every writable pin-mux register (`GPIO1_MODE`, `AGPIO_CFG`, `GPIO2_MODE`) is identical whether the strap is high or low, so there is no register to flip at runtime to get both. **Time-sharing is the only option** (§ workflow below).
 
 **Workflow — strap for JTAG only to flash/bring-up, then strap back to run storage:**
 - **bodybytes board:** `UART_TXD1` carries a pull-up (GPIO / JTAG-off) for normal eMMC operation; only pull it low when actively using JTAG.
-- **VoCore2 breakout:** `JP1` at "GPIO" (1-2) = SD/eMMC works; `JP1` at "JTAG" (2-3) = JTAG works — see [vocore2.md](vocore2.md).
+- **VoCore2:** see [vocore2.md §Breakout Board Setup](vocore2.md#breakout-board-setup).
 
 So to test SD/eMMC in U-Boot: flash U-Boot to NOR over JTAG, then strap to GPIO mode, reboot, and drive U-Boot over the UART console.
 

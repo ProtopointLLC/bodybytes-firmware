@@ -193,29 +193,20 @@ The fix is to **lower `max-frequency`** in both device trees — they must match
 
 ### eMMC manufacturing from PC
 
-On VoCore2, the Hardkernel eMMC module can be removed from the reader board and plugged directly into a PC for partitioning and flashing - no JTAG or U-Boot needed. The reader board appears as a USB mass storage device. Replace `/dev/sdX` with the actual device:
+On VoCore2, the Hardkernel eMMC module can be removed from the reader board and plugged directly into a PC for partitioning and flashing - no JTAG or U-Boot needed. The reader board appears as a USB mass storage device.
+
+Follow the same wipe, partition, and format steps as [flashing.md §5b](flashing.md#5b--first-install-from-nor-recovery), substituting `/dev/sdX` for `/dev/mmcblk0` (and `/dev/sdXN` for `/dev/mmcblk0pN`). Skip the `reboot` at the end — it is not needed when working from a PC.
+
+Then install the firmware directly from `sysupgrade.bin`:
 
 ```sh
-# Create GPT with 4 partitions
-sgdisk --zap-all /dev/sdX
-sgdisk \
-  -n 1:2048:+32M    -t 1:8300  -c 1:"kernel"      \
-  -n 2:0:+512M      -t 2:8300  -c 2:"rootfs"       \
-  -n 3:0:+4096M     -t 3:8300  -c 3:"rootfs_data"  \
-  -n 4:0:0          -t 4:8300  -c 4:"data"          \
-  /dev/sdX
-
-# Extract kernel and squashfs rootfs from sysupgrade.bin and write to eMMC
 SYSUPGRADE=openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
 tar xf "$SYSUPGRADE" -O 'sysupgrade-bodybytes,bodybytes/kernel' | dd of=/dev/sdX1 bs=4M conv=fsync
 tar xf "$SYSUPGRADE" -O 'sysupgrade-bodybytes,bodybytes/root'   | dd of=/dev/sdX2 bs=4M conv=fsync
-
-# Format overlay and data partitions as ext4
-mkfs.ext4 -L rootfs_data /dev/sdX3
-mkfs.ext4 -L data        /dev/sdX4
+sync
 ```
 
-Partition 1 holds the raw kernel binary; partition 2 holds the squashfs rootfs (both extracted from `sysupgrade.bin`). Partition 3 (`rootfs_data`) is the ext4 overlay - libfstools mounts it over the squashfs at boot by GPT label. Partition 4 (`data`) is auto-mounted at `/mnt/data` by `block-mount` via `auto_mount 1`. See [flashing.md §5](flashing.md#5--emmc) for the full layout.
+`rootfs_data` (partition 3) is left unformatted — `mount_root` creates it as F2FS on first boot, exactly as in the recovery-based install path.
 
 ---
 
@@ -225,7 +216,7 @@ VoCore2 uses a Winbond W25Q256FV: 32 MB total, 256-byte page size, 64 KB erase b
 
 ### Factory EEPROM comparison
 
-The VoCore2 factory partition is at NOR offset `0x40000` (bodybytes uses `0x50000`). VoCore2 has RF calibration burned from factory testing; bodybytes zeroes those fields and relies on the on-chip eFuse via `mediatek,eeprom-merge-otp`. This confirmed the field layout used for the bodybytes factory blob:
+The VoCore2 factory partition is at NOR offset `0x40000` (bodybytes uses `0x50000`). VoCore2 has RF calibration burned from factory testing; bodybytes zeroes those fields and relies on the on-chip eFuse via `mediatek,eeprom-merge-otp`.
 
 | Offset | VoCore2 value | Bodybytes value | Note |
 |--------|---------------|-----------------|------|
@@ -243,8 +234,6 @@ dump_image build/vocore2_factory.bin 0xBC040000 0x10000
 ```
 
 `md.b 0xBC040000 10` in a U-Boot console confirms `28 76` in the first two bytes (chip ID `0x7628` LE).
-
-The recovery boot path (`altbootcmd` → `run boot_sf` → `fit_load_sf`) copies the kernel to RAM via `sf read` before booting - see §SPI Addressing Mode below for why direct XIP boot (`bootm 0xBC060000`) is unreliable and is not used.
 
 ### SPI Addressing Mode - CHIP_MODE Strapping
 

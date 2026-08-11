@@ -61,7 +61,7 @@ The mt7603 driver (which handles MT7628) reads a 1 KB (0x400 byte) EEPROM from t
 | `0x004` | 6 B | WiFi MAC (`MT_EE_MAC_ADDR`) | your assigned MAC address |
 | `0x00a`–`0x3FF` | - | RF calibration | zero; merged from on-chip eFuse at boot |
 
-If the factory partition is entirely erased (all `0xFF`), `mt7603_check_eeprom` returns `-EINVAL` and the driver copies the full eFuse wholesale instead of merging - including whatever MAC MediaTek burned into the chip (often `0xFF:FF:FF:FF:FF:FF` on engineering samples). Always write a valid factory blob with your own MAC.
+If the factory partition is entirely erased (all `0xFF`), `mt7603_check_eeprom` returns `-EINVAL` and the driver copies the full eFuse wholesale instead of merging - including whatever MAC MediaTek burned into the chip (often `0xFF:FF:FF:FF:FF:FF` on engineering samples). Always write a valid factory blob with your own MAC. See [wifi.md §Register map](wifi.md#register-map) for the full 512-byte EEPROM register table.
 
 ### 2b - Reading the factory partition via JTAG
 
@@ -141,7 +141,7 @@ U-Boot should appear on **UART2 (TP19/TP20)** at **115200 8N1** without any JTAG
 
 ### 5a - GPT partition layout
 
-**Hardware partitions vs. this GPT.** A real eMMC exposes several JEDEC *hardware* partitions as separate block devices: the User Data Area (`/dev/mmcblk0`), two small Boot Area Partitions (`/dev/mmcblk0boot0` / `boot1`, typically 2–4 MB, held read-only by the kernel via `force_ro`), and usually an RPMB (`/dev/mmcblk0rpmb`). These are fixed features of the chip, present regardless of content. The GPT and all four partitions below live entirely on the **user area** (`mmcblk0`); bodybytes boots from NOR, so the boot/RPMB areas are unused and left untouched — `parted`, `mkfs`, sysupgrade and the §5b wipe all operate on `mmcblk0` only. (An SD card has no boot/RPMB areas, which is why the SD dev rig shows only `mmcblk0`.)
+**Hardware partitions vs. this GPT.** A real eMMC exposes several JEDEC *hardware* partitions as separate block devices: the User Data Area (`/dev/mmcblk0`), two small Boot Area Partitions (`/dev/mmcblk0boot0` / `boot1`, typically 2–4 MB, held read-only by the kernel via `force_ro`), and usually an RPMB (`/dev/mmcblk0rpmb`). These are fixed features of the chip, present regardless of content. The GPT and all four partitions below live entirely on the **user area** (`mmcblk0`); bodybytes boots from NOR, so the boot/RPMB areas are unused and left untouched — `parted`, `mkfs`, sysupgrade and the §5b wipe all operate on `mmcblk0` only. (An SD card has no boot/RPMB areas.)
 
 All four partitions use the "Linux filesystem" GPT type GUID (`0FC63DAF…`), set automatically by `parted mkpart` without an explicit filesystem type. The GPT type does not enforce any filesystem; only p3 and p4 have actual filesystems.
 
@@ -234,25 +234,6 @@ Key points relevant to flashing:
 - A blank or corrupt env partition falls back to the compiled-in defaults automatically.
 - The NOR env partition is `read-only` in the OpenWrt DTS; `fw_setenv` cannot write to it without loading `kmod-mtd-rw`. The compiled-in env is the authoritative copy.
 - To manually persist a change after modifying a variable at the U-Boot prompt, run `saveenv`.
-- `gpio read recovery_state ${gpio_recovery}` reads GPIO#14 into a variable; `test "${recovery_state}" = "0"` is true when the pin is low (magnet present → `boot_sf`). `boot_auto` is the eMMC path; `boot_sf` is the NOR recovery path.
-- For NOR recovery boot: `fit_load_sf` does a two-pass read — reads one block first to parse the FIT header and extract the image size, then reads the exact number of bytes. XIP via `0xBC060000` is not used because the MT7628AN CHIP_MODE strapping selects 3-byte auto-read (16 MB window), insufficient for recovery images that span the 16 MB boundary.
-- `CONFIG_CMD_PART=y` and `CONFIG_EFI_PARTITION=y` must be set in `bodybytes_defconfig` for `part start` (used by `fit_load_mmc`) to work - see [uboot.md](uboot.md).
-
-### 6c - Boot sequence
-
-Normal boot:
-
-1. U-Boot reads GPIO#14 → high → `boot_selected` runs `boot_auto`
-2. `fit_load_mmc`: reads GPT partition `kernel` (p1) from eMMC into `${dram_staging}` (0x82000000) using `part start`/`part size` + a two-pass `mmc read`; the FIT DTB already contains `console=ttyS2,115200 root=/dev/mmcblk0p2 rootwait` in its `chosen.bootargs`
-3. `bootm ${dram_staging}` parses the FIT image: extracts and decompresses the kernel, extracts the DTB, applies memory and bootargs fixup to the DTB, then jumps to the kernel entry
-4. Linux mounts squashfs rootfs (p2) as root; libfstools (fstools) detects the `rootfs_data` GPT label on p3 and layers it at `/overlay` via overlayfs
-
-Recovery boot:
-
-1. U-Boot reads GPIO#14 → low → `boot_selected` runs `boot_sf`
-2. `fit_load_sf`: `sf probe` switches W25Q512JV to 4-byte mode; reads one block from NOR offset `0x60000` to parse the FIT header and determine `fit_size`, then reads the full image into `${dram_staging}`
-3. `bootm ${dram_staging}` parses the FIT image, decompresses the initramfs kernel, and boots with the embedded DTB
-4. OpenWrt runs entirely from RAM; eMMC is untouched and available for repair
 
 ---
 

@@ -47,14 +47,7 @@ UART2 is routed to EPHY MDI_P2 pads (MDI_TP_P2 / MDI_TN_P2, SoC pins 47/48): `ua
 
 #### SPI NOR flash - `&spi0`
 
-W25Q512JV, 64 MB, CS0, 25 MHz. The OS lives on eMMC; NOR holds only the bootloader and the WiFi calibration EEPROM.
-
-| Partition | Offset | Size | Notes |
-|-----------|--------|------|-------|
-| `u-boot` | `0x000000` | 256 KB | read-only |
-| `u-boot-env` | `0x040000` | 64 KB | read-only in the Linux DTS (U-Boot's own DTS omits `read-only` so `saveenv` works from U-Boot); contains `bootlimit=3`, `altbootcmd`, and other boot variables; readable via `fw_printenv`; never written by OpenWrt |
-| `factory` | `0x050000` | 64 KB | read-only; 1 KB WiFi EEPROM at offset 0 |
-| `recovery` | `0x060000` | 63.625 MB | read-only; OpenWrt initramfs kernel |
+W25Q512JV, 64 MB, CS0, 25 MHz. The OS lives on eMMC; NOR holds only the bootloader and the WiFi calibration EEPROM. See [flashing.md §1a](flashing.md#1a--partition-map) and [§1b](flashing.md#1b--partition-details) for the full partition map and per-partition details.
 
 The `factory` partition exposes a 1 KB nvmem cell (`eeprom@0`) consumed by `&wmac`. If the partition is erased (all 0xFF) the driver falls back to the on-chip eFuse automatically. [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) generates the factory blob on the fly; pass `--mac XX:XX:XX:XX:XX:XX` to override the default MAC from `config.ini`.
 
@@ -100,7 +93,7 @@ Kingston EMMC128-IY29-5B111, 128 GB eMMC 5.1 (or microSD), on EPHY P3/P4 MDI pad
 | `non-removable` | - | Card is always present; no CD polling needed |
 | `no-sdio` | - | Prevents SDIO (CMD5) probe; without this the MSDC driver sets `SDC_CFG_SDIO` in hardware and CMD5 causes "no support for card's volts" + CMD1 busy-poll timeout |
 
-**Clock** - the board DTSI sets `max-frequency = <26000000>`; `cap-sd-highspeed`, `cap-mmc-highspeed`, and `bus-width = <4>` are inherited from `mt7628an.dtsi`. SD/MMC High-Speed (50 MHz class) is the fastest the MT7628 SDXC does at 3.3 V VCCQ — HS200/HS400 need 1.8 V and are unreachable — but the usable clock depends on wiring: the SDXC bus runs on marginal EPHY pads, so **on loose/long dev-rig jumper wiring 48 MHz produces CMD-line errors and the clock must be dropped** (26 MHz here; see [vocore2.md §Bus speed depends on your wiring](vocore2.md#bus-speed-depends-on-your-wiring)). 26 stays just above 25 MHz to keep the driver's rising-edge high-speed sampling active. On clean soldered traces the bus enumerates and reads cleanly at 48 MHz (a SanDisk SD32G came up `high speed SDHC`, 4-bit, `actual clock 48 MHz`).
+**Clock** - the board DTSI sets `max-frequency = <48000000>`; `cap-sd-highspeed`, `cap-mmc-highspeed`, and `bus-width = <4>` are inherited from `mt7628an.dtsi`. SD/MMC High-Speed (50 MHz class) is the fastest the MT7628 SDXC does at 3.3 V VCCQ — HS200/HS400 need 1.8 V and are unreachable. The bodybytes PCB (short soldered traces) runs cleanly at 48 MHz. On dev-rig wiring, `max-frequency` may need to be reduced — see [vocore2.md §Bus speed depends on your wiring](vocore2.md#bus-speed-depends-on-your-wiring).
 
 8-bit bus width (`bus-width = <8>`) is not possible: the four additional data lines (SD_D4–SD_D7) would require `groups = "uart2"; function = "sdxc d5 d4"` (as defined in `emmc_iot_8bit_mode` in the dtsi), which conflicts with UART2 as the system console.
 
@@ -108,7 +101,7 @@ Kingston EMMC128-IY29-5B111, 128 GB eMMC 5.1 (or microSD), on EPHY P3/P4 MDI pad
 
 #### SD/eMMC driver & kernel patches
 
-The board uses the upstream MSDC driver (`CONFIG_MMC_MTK`, compatible `mediatek,mt7620-mmc`, `drivers/mmc/host/mtk-sd.c`), **built into the kernel** rather than shipped as the `kmod-mmc-mtk` module: the MMC stack (`CONFIG_MMC`, `CONFIG_MMC_BLOCK`, `CONFIG_MMC_MTK`, `CONFIG_MMC_HSQ`, `CONFIG_MMC_CQHCI`, `CONFIG_PWRSEQ_EMMC`) is set `=y` in [`config-6.12`](../openwrt/target/linux/ramips/mt76x8/config-6.12). This is mandatory for the normal (eMMC) boot: the squashfs rootfs is on `/dev/mmcblk0p2`, so the block driver has to be in the kernel *before* it can mount root — a driver packaged as a module lives on that very rootfs and can never load itself. Recovery is exempt because its rootfs is the initramfs in RAM, so the MMC modules load normally after boot. The out-of-tree `kmod-sdhci-mt7620` (`ralink,mt7620-sdhci`) was rejected because it does not call `mmc_of_parse()` — it would silently ignore `mmc-pwrseq` and most DTS properties.
+The board uses the upstream MSDC driver (`CONFIG_MMC_MTK`, compatible `mediatek,mt7620-mmc`, `drivers/mmc/host/mtk-sd.c`), **built into the kernel** rather than shipped as the `kmod-mmc-mtk` module: the MMC stack (`CONFIG_MMC`, `CONFIG_MMC_BLOCK`, `CONFIG_MMC_MTK`, `CONFIG_MMC_HSQ`, `CONFIG_MMC_CQHCI`, `CONFIG_PWRSEQ_EMMC`) is set `=y` in [`config-6.12`](../openwrt/target/linux/ramips/mt76x8/config-6.12). This is mandatory for the normal (eMMC) boot: the squashfs rootfs is on `/dev/mmcblk0p2`, so the block driver has to be in the kernel *before* it can mount root — a driver packaged as a module lives on that very rootfs and can never load itself. Recovery is exempt because its rootfs is the initramfs in RAM, so the MMC modules load normally after boot.
 
 MT7628 support comes from three ramips patches to `mtk-sd.c` (mirrored by the U-Boot driver fix):
 
@@ -146,7 +139,7 @@ UART0 is disabled (`status = "disabled"`). `mt7628an.dtsi` leaves `uartlite` ena
 
 #### 3.3 V regulator - `reg_3v3`
 
-A `regulator-fixed` node providing a permanent 3.3 V rail (`regulator-always-on`), overriding the base DTSi `reg_vmmc`/`reg_vqmmc` supplies for `vmmc-supply` and `vqmmc-supply` on `&sdhci`. The MT7628 SDXC controller is hard-wired to 3.3 V; the explicit regulator ensures the OCR mask is correct for voltage negotiation. Note: the `no support for card's volts` boot error is caused by missing `no-sdio` (SDIO CMD5 probe with `SDC_CFG_SDIO` set), not by absent voltage supplies.
+A `regulator-fixed` node providing a permanent 3.3 V rail (`regulator-always-on`), overriding the base DTSi `reg_vmmc`/`reg_vqmmc` supplies for `vmmc-supply` and `vqmmc-supply` on `&sdhci`. The MT7628 SDXC controller is hard-wired to 3.3 V; the explicit regulator ensures the OCR mask is correct for voltage negotiation.
 
 #### UART2 - `&uart2`
 
@@ -196,7 +189,16 @@ GPT partition 1 (`kernel`) holds the raw FIT image blob with no filesystem. `emm
 - `fstrim` - TRIMs a mounted filesystem (`fstrim /mnt/data`, `/overlay`); OpenWrt runs no periodic TRIM by default, so this maintains write performance and reduces wear on the eMMC/SD.
 - `dtc` - device tree compiler; included for on-device DTS/DTB debugging.
 - `iperf3` - network throughput benchmarking; run `iperf3 -s` on device, `iperf3 -c bodybytes.local` from a client to measure WiFi throughput under load.
-- `fio` - flexible storage benchmarking (IOPS/throughput/latency) for characterising the eMMC/SD.
+- `fio` - flexible storage benchmarking (IOPS/throughput/latency) for characterising the eMMC/SD. Upload [`scripts/emmc-bench.fio`](../scripts/emmc-bench.fio) to the device and run `fio emmc-bench.fio` to benchmark `/mnt/data` and verify bus stability. The job file uses libaio with `iodepth=1` for sequential and `iodepth=8` for random tests. Reference numbers for Kingston EMMC128-IY29-5B111, 4-bit bus @ 48 MHz on EPHY pads:
+
+  | Test | Throughput | IOPS |
+  |---|---|---|
+  | Sequential write (1M) | 20.7 MB/s | — |
+  | Sequential read (1M) | 21.4 MB/s | — |
+  | Random write 4K | 7.4 MB/s | 1902 |
+  | Random read 4K | 9.1 MB/s | 2321 |
+
+  Sequential throughput (~21 MB/s) is ~88% of the 24 MB/s theoretical bus ceiling. These numbers are a rough orientation — they will vary with the eMMC part, bus wiring quality, and clock speed.
 - `-wpad-basic-mbedtls wpad-openssl` - swaps the subtarget default for the full WPA supplicant/hostapd build with OpenSSL; required for WPA3 (SAE) and 802.11r. The MT7628AN mt76 driver sets `IEEE80211_HW_MFP_CAPABLE` via the shared mt76 framework (`mac80211.c:476`), confirming hardware 802.11w support.
 - `-swconfig` - removes the `swconfig` Ethernet switch configuration tool from the image. `swconfig` is in the mt76x8 subtarget `DEFAULT_PACKAGES` for the many mt76x8 boards that have an internal switch. Bodybytes keeps `&ethernet`/`&esw` enabled (for the EPHY bring-up the SD pads depend on — see [Ethernet](#ethernet---ethernet--esw)), so the switch driver does probe, but the board exposes no Ethernet ports and there is nothing to configure — `swconfig` is dead weight either way.
 - `luci-ssl-openssl` - LuCI collection package that pulls in `luci-light`, `libustream-openssl`, and `openssl-util`. Enables HTTPS for the LuCI web interface; uhttpd listens on both port 80 (HTTP, redirects to HTTPS) and port 443. OpenSSL is already in the image from `wpad-openssl` so this adds only the ustream TLS glue and the `openssl` tool used for certificate generation. Replaces `libustream-mbedtls` as the ustream TLS backend.
