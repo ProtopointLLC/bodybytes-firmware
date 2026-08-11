@@ -224,18 +224,3 @@ Continue with [flashing.md §4b](flashing.md#4b--full-nor-programming-first-time
 See [flashing.md §1a](flashing.md#1a--partition-map) for the full NOR partition map and [flashing.md §5a](flashing.md#5a--gpt-partition-layout) for the eMMC GPT layout.
 
 SPI NOR is at physical `0x1c000000`, accessible to the CPU at `0x9c000000` (KSEG0 cached) or `0xbc000000` (KSEG1 uncached). Use `0xbc000000 + <nor_offset>` for direct JTAG memory reads (e.g. `mdw 0xbc050000 4` to read the first 16 bytes of the factory partition).
-
----
-
-## Troubleshooting
-
-| Symptom | Likely cause / next check |
-|---------|---------------------------|
-| `JTAG tap: ... UNEXPECTED` | Wrong IDCODE - check target config and TDI/TDO wiring |
-| `Timed out waiting for device to appear` | VTref missing or target unpowered |
-| `Error: JTAG scan chain interrogation failed` | TCK/TMS/TDO wiring, target power, or reset state problem |
-| `tap: mt7628.cpu enabled (idcode 0x00000000)` | TDO open, target unpowered, or TAP held in reset |
-| `halt` times out | CPU may be held in reset, JTAG mode may not be strapped, or EJTAG pins muxed to LEDs |
-| `targets` shows `running` after a previous clean halt | Check for GDB/IDE resume, external reset, watchdog, or stale register reads |
-| PC remains `0x9c000000` after `resume; sleep 100; halt` | CPU not progressing from NOR entry - check clock, SPI flash activity, and boot straps |
-| `halt` times out after `init` | Board not powered, JTAG mode not strapped (TXD1 must be low), or EPHY LED pins not muxed to JTAG |

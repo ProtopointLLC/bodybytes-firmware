@@ -160,7 +160,7 @@ The SDXC data bus is identically wired between bodybytes and VoCore2 - the same 
 | SD\_CMD | MDI\_RN\_P4 | SD\_CMD |
 | SD\_D3 | MDI\_TP\_P4 | SD\_D3 |
 | SD\_D2 | MDI\_TN\_P4 | SD\_D2 |
-| RST\_n | MDI\_TN\_P1 | EMMC\_RST (bodybytes only) |
+| RST\_n | MDI\_TN\_P1 | EMMC\_RST |
 
 Both use the legacy 4-bit data interface (SD\_D0–D3). 8-bit eMMC mode is not used.
 
