@@ -186,12 +186,12 @@ parted -s /dev/mmcblk0 mkpart rootfs_data 545MiB 4641MiB
 parted -s /dev/mmcblk0 mkpart data 4641MiB 100%
 sync
 partprobe /dev/mmcblk0
-mkfs.ext4 -E root_owner=8000:8000 -L data /dev/mmcblk0p4
+mkfs.ext4 -L data /dev/mmcblk0p4
 sync
 reboot
 ```
 
-Only `data` is formatted here. **`rootfs_data` is left unformatted** — `mount_root` creates F2FS on first boot (the image ships `mkf2fs`/`kmod-fs-f2fs`), and re-creates it after `sysupgrade -n` or factory reset. `root_owner=8000:8000` sets the `data` root owned by uid/gid 8000 (the `bodybytes` user `90_defaults` creates) so the Samba share can write as `bodybytes` without `force user = root`.
+Only `data` is formatted here. **`rootfs_data` is left unformatted** — `mount_root` creates F2FS on first boot (the image ships `mkf2fs`/`kmod-fs-f2fs`), and re-creates it after `sysupgrade -n` or factory reset. `data` is left at plain `mkfs.ext4` defaults (root:root) — the Samba share uses `force_root = 1` (see [openwrt.md §1](openwrt.md#1---board-files)) so `smbd` always writes as root regardless of which unix account authenticated the connection, and `dufs` (which also always runs as root — see its `DEVICE_PACKAGES` entry in the same doc) needs no special ownership either. Both writers land on the same uid this way, so there's nothing left to reconcile between them.
 
 **Step 3 - reboot recovery**
 
@@ -199,13 +199,11 @@ The device reboots into NOR recovery (eMMC is still empty). This is required: `s
 
 **Step 4 - install via sysupgrade**
 
-Transfer `sysupgrade.bin` to the device and run sysupgrade. Either:
+Open `http://192.168.1.1` / `https://bodybytes.local` (default password `bodybytes`) → System → Backup / Flash Firmware → Flash new firmware image → upload [`openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin).
 
-_Via LuCI web interface:_ open `http://192.168.1.1` / `https://bodybytes.local` (default password `bodybytes`) → System → Backup / Flash Firmware → Flash new firmware image → upload [`openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin`](../openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin).
+**Use the LuCI web interface, not the CLI.** `sysupgrade -n /tmp/<filename>` run manually over SSH has been observed to leave the device on the old rootfs/overlay without actually applying the new image (no error reported, but `uci-defaults` never re-ran and the new firmware's changes never took effect) — root cause not yet identified. The web UI upload path has been reliable; use it for both first install and all subsequent upgrades.
 
-_Via SSH:_ copy `sysupgrade.bin` to `/tmp/` on the device with `scp`, then run `sysupgrade -n /tmp/<filename>` on the device (`-n` skips preserving settings, appropriate for first install).
-
-`emmc_do_upgrade` finds `kernel` and `rootfs` partitions by GPT label, writes the kernel and squashfs, and reboots into the new firmware. All subsequent upgrades follow the same flow (web UI or `sysupgrade`) from the installed system, without the partitioning or recovery-reboot steps.
+`emmc_do_upgrade` finds `kernel` and `rootfs` partitions by GPT label, writes the kernel and squashfs, and reboots into the new firmware. All subsequent upgrades follow the same web UI flow from the installed system, without the partitioning or recovery-reboot steps.
 
 ### 5c - OpenWrt storage mounts
 

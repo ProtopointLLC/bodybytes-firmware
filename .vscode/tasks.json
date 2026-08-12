@@ -38,7 +38,7 @@
         {
             "label": "OpenWrt: Setup",
             "type": "shell",
-            "command": "nix run .#openwrt -- -c 'cd openwrt && ./scripts/feeds update -a && ./scripts/feeds install -a && cp ../bodybytes.config .config && make defconfig && make download'",
+            "command": "nix run .#openwrt -- -c 'cd openwrt && ./scripts/feeds update -a && for f in packages luci routing telephony video; do ./scripts/feeds install -a -p $f; done && ./scripts/feeds install -p immortalwrt_luci luci-app-dufs && cp ../bodybytes.config .config && make defconfig && make download'",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",

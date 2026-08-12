@@ -46,6 +46,10 @@ Reachable at `https://bodybytes.local`, `https://192.168.1.1`, or `https://fd13:
 
 `/mnt/data` (128 GB eMMC `data` partition) is shared read-write as a share named `data`.
 
+**File sharing (dufs)**
+
+Browser-based alternative to Samba, reachable at `https://bodybytes.local:5000/`. `/public` is open, read-write, no login. `/protected` requires login (`bodybytes`/`bodybytes` by default — change before deployment) and is also read-write. Nothing else on the `data` partition is reachable through dufs — only these two paths.
+
 ## Development with VoCore2
 
 The [VoCore2](https://vocore.io/v2.html) module uses the same MT7628AN SoC and can stand in as a lower-risk development board during U-Boot and OpenWrt bring-up. The bodybytes U-Boot and OpenWrt builds run on VoCore2 without modification; differences (128 MB RAM, 32 MB NOR, eMMC via adapter board, push-button recovery trigger) are handled by the `[board:vocore2]` profile in `scripts/config.ini`. See [docs/vocore2.md](docs/vocore2.md) for hardware differences, JTAG wiring, and WiFi calibration notes.
@@ -56,6 +60,6 @@ The [VoCore2](https://vocore.io/v2.html) module uses the same MT7628AN SoC and c
 - [docs/jtag.md](docs/jtag.md) - JTAG wiring, connectivity check, PLL/DRAM bootstrap
 - [docs/uboot.md](docs/uboot.md) - U-Boot board files, NOR image, and env layout
 - [docs/flashing.md](docs/flashing.md) - full first-install and sysupgrade procedures
-- [docs/openwrt.md](docs/openwrt.md) - OpenWrt board files, DTS, and package reference
+- [docs/openwrt.md](docs/openwrt.md) - OpenWrt board files, DTS, and package reference (includes Travelmate WiFi uplink / hybrid AP+STA relay)
 - [docs/wifi.md](docs/wifi.md) - WiFi EEPROM register map and calibration profile
 - [docs/vocore2.md](docs/vocore2.md) - VoCore2 as development proxy: hardware differences, JTAG, NOR/eMMC, WiFi EEPROM calibration

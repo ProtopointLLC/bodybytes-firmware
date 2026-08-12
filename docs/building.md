@@ -75,8 +75,11 @@ Enters a `buildFHSEnv` shell with all required host tools (no cross-compilation 
 ```sh
 cd openwrt
 ./scripts/feeds update -a
-./scripts/feeds install -a
+for f in packages luci routing telephony video; do ./scripts/feeds install -a -p $f; done
+./scripts/feeds install -p immortalwrt_luci luci-app-dufs
 ```
+
+`feeds.conf.default` pins a second feed, `immortalwrt_luci`, used only to cherry-pick `luci-app-dufs` (not in the primary `luci` feed). **`./scripts/feeds install -a` alone is not scoped to "the feeds that existed before" — it walks every feed listed in `feeds.conf.default`, full stop.** Running it plain here would install all ~190 other `luci-app-*`/`luci-theme-*`/`luci-proto-*` packages from `immortalwrt_luci` too (confirmed: several of those have broken Kconfig, e.g. recursive-dependency errors on `luci-app-passwall`/`luci-app-homeproxy`/`luci-app-ipsec-vpnd`, since that feed normally pairs with ImmortalWrt's own `packages` fork, not upstream's). The `for` loop above scopes `-a` to just the five feeds this project actually wants everything from (`-a -p <feedname>` = "install all, but only from this feed"); `immortalwrt_luci` is deliberately left out of it and only ever touched by the final targeted single-package install.
 
 ### Configure
 
