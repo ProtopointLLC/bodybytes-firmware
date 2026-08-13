@@ -79,7 +79,9 @@ for f in packages luci routing telephony video; do ./scripts/feeds install -a -p
 ./scripts/feeds install -p immortalwrt_luci luci-app-dufs
 ```
 
-`feeds.conf.default` pins a second feed, `immortalwrt_luci`, used only to cherry-pick `luci-app-dufs` (not in the primary `luci` feed). **`./scripts/feeds install -a` alone is not scoped to "the feeds that existed before" — it walks every feed listed in `feeds.conf.default`, full stop.** Running it plain here would install all ~190 other `luci-app-*`/`luci-theme-*`/`luci-proto-*` packages from `immortalwrt_luci` too (confirmed: several of those have broken Kconfig, e.g. recursive-dependency errors on `luci-app-passwall`/`luci-app-homeproxy`/`luci-app-ipsec-vpnd`, since that feed normally pairs with ImmortalWrt's own `packages` fork, not upstream's). The `for` loop above scopes `-a` to just the five feeds this project actually wants everything from (`-a -p <feedname>` = "install all, but only from this feed"); `immortalwrt_luci` is deliberately left out of it and only ever touched by the final targeted single-package install.
+`feeds.conf.default` pins a second feed, `immortalwrt_luci`, used only to cherry-pick `luci-app-dufs` (not in the primary `luci` feed). **`./scripts/feeds install -a` alone is not scoped to "the feeds that existed before" — it walks every feed listed in `feeds.conf.default`, full stop.** Running it plain here would install all ~190 other `luci-app-*`/`luci-theme-*`/`luci-proto-*` packages from `immortalwrt_luci` too (confirmed: several of those have broken Kconfig, e.g. recursive-dependency errors on `luci-app-passwall`/`luci-app-homeproxy`/`luci-app-ipsec-vpnd`, since that feed normally pairs with ImmortalWrt's own `packages` fork, not upstream's). The `for` loop above scopes `-a` to just the five feeds this project actually wants everything from (`-a -p <feedname>` = "install all, but only from this feed"); `immortalwrt_luci` is deliberately left out of it and only ever touched by the final targeted single-package install. Neither `travelmate` nor `luci-app-travelmate` need any special-casing here — both come straight from their (forked) feeds like any other package now (see below).
+
+**Never hand-edit files inside `openwrt/feeds/`.** `./scripts/feeds update <name>` does a git checkout to the pinned commit and will silently discard local edits there (or refuse on a dirty tree); `package/feeds/<name>/<pkg>` is just a symlink into the same checkout, not a separate copy, so it doesn't help either. This project's convention for a board-specific change to a feed package is to **fork the feed itself**: `feeds.conf.default`'s `packages` and `luci` lines point at [`StarGate01/bodybytes-packages`](https://github.com/StarGate01/bodybytes-packages) and [`StarGate01/bodybytes-luci`](https://github.com/StarGate01/bodybytes-luci) (both branch `bodybytes`, each pinned to a specific commit like every other feed here) instead of upstream, carrying the `travelmate`/`luci-app-travelmate` patches as real, minimal commits in each fork's git history. That survives `feeds update` the same way any other pinned-feed change does, reads as an ordinary diff (`git diff <old-pin>..<new-pin>` in the fork), and is trivially upstreamable later if desired. Worth it even though `packages`/`luci` are large monorepos covering hundreds of unrelated packages: the actual patch in each is tiny (one package, a handful of commits), so the maintenance burden is small regardless of how big the fork itself is — what matters is how much you're actually patching, not how big the repo you're patching happens to be. See the Travelmate bullet in `docs/openwrt.md` for what each patch does.
 
 ### Configure
 
@@ -124,7 +126,17 @@ openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-initramfs-kernel.bin
 | _**OpenWrt: Setup**_ | Feeds update + install, configure, download - use on first checkout |
 | _**OpenWrt: Download Packages**_ | Configure + download only (skip feeds re-update on incremental builds) |
 | _**OpenWrt: Build**_ | Configure + `make V=s world -j$(nproc)` |
+| _**OpenWrt: Remote Build**_ | Configure + [`scripts/remote-openwrt-build.sh`](../scripts/remote-openwrt-build.sh) `V=s world -j$(nproc)` (see below) |
 
-All three tasks enter `nix develop .#openwrt` automatically - no manual shell entry required.
+All tasks enter `nix develop .#openwrt` (or `nix run .#openwrt`) automatically - no manual shell entry required, except for the remote-build step itself, which runs directly on the host since it needs `ssh`/`rsync`.
+
+### Remote build
+
+[`scripts/remote-openwrt-build.sh`](../scripts/remote-openwrt-build.sh) offloads `make world` to a faster machine over SSH (default host: `redbox-server`), then rsyncs `build_dir`/`staging_dir`/`bin`/`dl` back so this machine can keep building incrementally once the remote is offline. Requires the repo checked out at the *same absolute path* on both machines and Nix (with flakes) installed remotely - OpenWrt's self-built toolchain embeds absolute paths, and incremental rebuilds rely on rsync preserving file mtimes.
+
+```sh
+scripts/remote-openwrt-build.sh V=s world -j'$(nproc)'   # quoted: nproc evaluates on the remote, not here
+scripts/remote-openwrt-build.sh download
+```
 
 → See [flashing.md §3](flashing.md#3--assemble-nor-image) to assemble the NOR image and [flashing.md §4](flashing.md#4--program-spi-nor) to program NOR. See [flashing.md §5](flashing.md#5--emmc) for initial eMMC install.
