@@ -79,24 +79,6 @@
             }
         },
         {
-            "label": "OpenWrt: Remote Build",
-            "type": "shell",
-            "command": "nix run .#openwrt -- -c 'cd openwrt && cp ../bodybytes.config .config && make defconfig' && REMOTE_HOST='${input:remoteHost}' ./scripts/remote-openwrt-build.sh V=s world -j'$(nproc)'",
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated",
-                "clear": true
-            },
-            "problemMatcher": {
-                "base": "$gcc",
-                "fileLocation": [
-                    "autoDetect",
-                    "${workspaceFolder}/openwrt"
-                ]
-            },
-            "group": "build"
-        },
-        {
             "label": "Serial Monitor",
             "type": "shell",
             "command": "nix develop .#uboot --command picocom -b 115200 --flow n /dev/ttyUSB0",
@@ -201,12 +183,6 @@
             "type": "promptString",
             "description": "WiFi MAC address (XX:XX:XX:XX:XX:XX)",
             "default": "b8:d8:12:6c:d2:f4"
-        },
-        {
-            "id": "remoteHost",
-            "type": "promptString",
-            "description": "Remote build host (SSH alias)",
-            "default": "redbox-server"
         }
     ]
 }

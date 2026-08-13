@@ -126,17 +126,7 @@ openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-initramfs-kernel.bin
 | _**OpenWrt: Setup**_ | Feeds update + install, configure, download - use on first checkout |
 | _**OpenWrt: Download Packages**_ | Configure + download only (skip feeds re-update on incremental builds) |
 | _**OpenWrt: Build**_ | Configure + `make V=s world -j$(nproc)` |
-| _**OpenWrt: Remote Build**_ | Configure + [`scripts/remote-openwrt-build.sh`](../scripts/remote-openwrt-build.sh) `V=s world -j$(nproc)` (see below) |
 
-All tasks enter `nix develop .#openwrt` (or `nix run .#openwrt`) automatically - no manual shell entry required, except for the remote-build step itself, which runs directly on the host since it needs `ssh`/`rsync`.
-
-### Remote build
-
-[`scripts/remote-openwrt-build.sh`](../scripts/remote-openwrt-build.sh) offloads `make world` to a faster machine over SSH (default host: `redbox-server`), then rsyncs `build_dir`/`staging_dir`/`bin`/`dl` back so this machine can keep building incrementally once the remote is offline. Requires the repo checked out at the *same absolute path* on both machines and Nix (with flakes) installed remotely - OpenWrt's self-built toolchain embeds absolute paths, and incremental rebuilds rely on rsync preserving file mtimes.
-
-```sh
-scripts/remote-openwrt-build.sh V=s world -j'$(nproc)'   # quoted: nproc evaluates on the remote, not here
-scripts/remote-openwrt-build.sh download
-```
+All three tasks enter `nix develop .#openwrt` automatically - no manual shell entry required.
 
 → See [flashing.md §3](flashing.md#3--assemble-nor-image) to assemble the NOR image and [flashing.md §4](flashing.md#4--program-spi-nor) to program NOR. See [flashing.md §5](flashing.md#5--emmc) for initial eMMC install.
