@@ -6,3 +6,7 @@
 	path = openwrt
 	url = https://github.com/ProtopointLLC/bodybytes-openwrt.git
 	branch = bodybytes
+[submodule "docs/bodybytes-hardware"]
+	path = docs/bodybytes-hardware
+	url = https://github.com/ProtopointLLC/bodybytes-hardware.git
+	branch = main

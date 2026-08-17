@@ -181,8 +181,8 @@
         {
             "id": "mac",
             "type": "promptString",
-            "description": "WiFi MAC address (XX:XX:XX:XX:XX:XX)",
-            "default": "b8:d8:12:6c:d2:f4"
+            "description": "WiFi MAC address (XX:XX:XX:XX:XX:XX), or 'random' to generate a locally-administered one",
+            "default": "random"
         }
     ]
 }

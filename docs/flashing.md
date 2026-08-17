@@ -84,11 +84,13 @@ Expected bodybytes field values:
 
 The script generates a 1 KB blob: chip ID `0x7628` LE at `0x00`, 6-byte MAC at `0x04`, zeros from `0x0a`–`0x3FF` (left for eFuse merge at boot). Embedded at the start of the 64 KB `factory` region; remainder is `0xFF`.
 
+**`--mac random`** (the default whenever the factory partition is written and `--mac` is omitted): generates a MAC in the locally-administered, unicast address space — the U/L bit set and the multicast bit cleared on the first octet, the remaining five bytes uniformly random (the same scheme QEMU/libvirt/Docker use for generated MACs). This range can never collide with a real IEEE-assigned OUI, so no registration or allocation bookkeeping is needed to avoid stepping on another vendor's address; the 40 bits of remaining entropy make an accidental collision between two bodybytes units negligible. Pass an explicit `XX:XX:XX:XX:XX:XX` instead when a specific MAC is required (e.g. matching an existing DHCP reservation). MAC generation is host-side only: the on-device [`bodybytes-provision`](openwrt.md#board-profiles) script (for re-provisioning a MAC after initial flashing, from NOR recovery) always requires an explicit `--mac XX:XX:XX:XX:XX:XX` — generate one here first if needed.
+
 ---
 
 ## 3 - Assemble full NOR image (CH341A only)
 
-For CH341A programming, run from the repo root in the dev shell (`nix develop .#uboot`): `scripts/flash_nor_images.py --bodybytes --file --mac AA:BB:CC:DD:EE:FF`. `--file` implies `--all`; `--mac` is required for the factory partition. The script generates `build/bodybytes_nor_image.bin` (all gaps `0xFF`) and prints the exact `flashrom -p ch341a_spi ...` command. Contents:
+For CH341A programming, run from the repo root in the dev shell (`nix develop .#uboot`): `scripts/flash_nor_images.py --bodybytes --file`. `--file` implies `--all`; since that includes the factory partition, `--mac` defaults to a freshly generated `random` MAC (locally-administered, unicast — see §2c) if not given explicitly. The script generates `build/bodybytes_nor_image.bin` (all gaps `0xFF`) and prints the exact `flashrom -p ch341a_spi ...` command. Contents:
 
 | Offset | Content |
 |--------|---------|
@@ -115,7 +117,7 @@ Do not continue until U-Boot runs correctly from RAM.
 
 ### 4b - Full NOR programming (first-time / production)
 
-With U-Boot at its prompt, first run `scripts/flash_nor_images.py --bodybytes --full-erase` to wipe the chip, then `--bodybytes --all --mac AA:BB:CC:DD:EE:FF` to write all partitions. (`--full-erase` and partition flags are mutually exclusive — two separate runs.) `--all` loads each binary via JTAG and writes to NOR at offsets from the U-Boot DTB; `--mac` is required because `--all` includes the factory partition.
+With U-Boot at its prompt, first run `scripts/flash_nor_images.py --bodybytes --full-erase` to wipe the chip, then `--bodybytes --all` to write all partitions (add `--mac AA:BB:CC:DD:EE:FF` to assign a specific WiFi MAC instead of a freshly generated random one). (`--full-erase` and partition flags are mutually exclusive — two separate runs.) `--all` loads each binary via JTAG and writes to NOR at offsets from the U-Boot DTB; because it includes the factory partition, `--mac` defaults to `random` (see §2c) if omitted.
 
 **VS Code task:** _JTAG: Flash NOR_ runs `--all` with _JTAG: Start OpenOCD J-Link_ as a prerequisite. Run `--full-erase` manually first if needed.
 
@@ -123,7 +125,7 @@ With U-Boot at its prompt, first run `scripts/flash_nor_images.py --bodybytes --
 
 ### 4c - Incremental update (development)
 
-To re-flash individual partitions without a full chip erase, pass partition flags: `--u-boot`, `--recovery`, or multiple together (e.g. `--u-boot-env --factory --mac AA:BB:CC:DD:EE:FF`). `--mac` is required with `--factory`. Each partition is erased to its DTS-defined size before writing. After flashing `--u-boot-env`, run `saveenv` at the U-Boot prompt on next boot to restore compiled-in defaults. Power-cycle to boot from updated NOR.
+To re-flash individual partitions without a full chip erase, pass partition flags: `--u-boot`, `--recovery`, or multiple together (e.g. `--u-boot-env --factory`, or `--u-boot-env --factory --mac AA:BB:CC:DD:EE:FF` for a specific MAC). With `--factory` and no explicit `--mac`, a fresh `random` MAC is generated (see §2c). Each partition is erased to its DTS-defined size before writing. After flashing `--u-boot-env`, run `saveenv` at the U-Boot prompt on next boot to restore compiled-in defaults. Power-cycle to boot from updated NOR.
 
 ### 4d - Verify NOR boot
 
@@ -156,11 +158,26 @@ All four partitions use the "Linux filesystem" GPT type GUID (`0FC63DAF…`), se
 
 ### 5b - First install from NOR recovery
 
-The NOR recovery image (initramfs) includes `parted` in `DEVICE_PACKAGES`, so partitioning can be done entirely from the running recovery shell over SSH or the LuCI web interface.
+The NOR recovery image (initramfs) includes `parted` (a dependency of `bodybytes-provision`), so partitioning can be done entirely from the running recovery shell over SSH or the LuCI web interface.
 
 **Step 1 - boot NOR recovery**
 
 Hold the magnet against the hall-effect sensor during power-on. U-Boot detects GPIO#14 low and runs `boot_sf` (via `boot_selected`), booting the initramfs from NOR. The device comes up as a standard OpenWrt AP; connect to its WiFi network and SSH in as root (default password is `bodybytes`).
+
+**Optional - set the WiFi MAC and/or branding**
+
+Do this now, before touching the eMMC, if the device needs a specific WiFi MAC or a custom `branding` string (see [openwrt.md - Board profiles](openwrt.md#board-profiles)) — `90_defaults` reads both once, at the main image's first boot, so setting either afterwards needs a second boot before it takes effect:
+
+```sh
+bodybytes-provision set-mac AA:BB:CC:DD:EE:FF
+bodybytes-provision set-branding mydevice
+```
+
+Skip this if the factory-programmed MAC and the default `bodybytes` branding are fine as-is.
+
+**Recommended: `bodybytes-provision format-emmc`**
+
+From that SSH session, run [`bodybytes-provision format-emmc`](openwrt.md#board-profiles) — after a typed confirmation, it does Step 2 below (wipe, partition, format `data`), the same commands, in the same order, then tells you to reboot yourself (Step 3) before installing via sysupgrade (Step 4). Use the manual commands instead only where the tool doesn't apply - e.g. formatting an SD card from a PC (see [vocore2.md - eMMC manufacturing from PC](vocore2.md#emmc-manufacturing-from-pc)) - or to see exactly what it's doing.
 
 **Wipe first if the eMMC/card is not blank** (skip on a factory-fresh card)
 

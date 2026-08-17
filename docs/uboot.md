@@ -51,7 +51,9 @@ The SPL serial driver also requires `CFG_SYS_NS16550_COM3` (UART2's MMIO address
 
 The boot variables live in [`bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env), compiled into `default_environment[]` by the build system and also used as `mkenvimage` input by [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) — single source, no duplication. A blank or corrupt env partition falls back to compiled-in defaults. When changing a boot variable, edit only `bodybytes.env`.
 
-The file opens with layout variables (`bootlimit`, `dram_staging`, `dram_staging_max`, `gpio_recovery`, `mmc_dev`, `mmc_part`, `block_size`, `block_mask`, `sf_recovery`, `sf_recovery_max`) that parameterise all boot commands, making hardware adaptation straightforward.
+The file opens with layout variables (`bootlimit`, `branding`, `dram_staging`, `dram_staging_max`, `gpio_recovery`, `mmc_dev`, `mmc_part`, `block_size`, `block_mask`, `sf_recovery`, `sf_recovery_max`) that parameterise all boot commands, making hardware adaptation straightforward.
+
+**`branding`** is the one non-boot variable in the file: a plain string (default `bodybytes`), not consulted by any U-Boot boot command. OpenWrt's [`90_defaults`](openwrt.md#board-profiles) reads it at first boot via `fw_printenv -n branding` to derive the hostname, mDNS name, WiFi SSID/key, TLS cert subject, and Samba/dufs credentials — see [openwrt.md - Board profiles](openwrt.md#board-profiles). It lives in the env (rather than, say, a UCI default) so it survives a full OpenWrt reflash/factory-reset and is rewritable from NOR recovery without rebuilding firmware: `fw_setenv branding <name>` needs the same `kmod-mtd-rw` escape hatch as any other env write (see [openwrt.md - Escape hatch](openwrt.md#spi-nor-flash---spi0)), wrapped by [`bodybytes-provision set-branding <name>`](../openwrt/package/utils/bodybytes-provision/files/bodybytes-provision). `fw_printenv` itself needs no escape hatch — reading NOR is unaffected by the `read-only;` DTS flag, which only blocks writes.
 
 #### Boot menu
 

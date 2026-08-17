@@ -19,9 +19,14 @@ Prerequisites (JTAG):
 
 Usage:
   flash_nor_images.py --bodybytes --full-erase
-  flash_nor_images.py --bodybytes --all --mac XX:XX:XX:XX:XX:XX
+  flash_nor_images.py --bodybytes --all
   flash_nor_images.py --vocore2   --all --mac XX:XX:XX:XX:XX:XX
-  flash_nor_images.py --bodybytes --file --mac XX:XX:XX:XX:XX:XX
+  flash_nor_images.py --bodybytes --file --mac random
+
+--mac defaults to 'random' whenever the factory partition is written: a
+freshly generated MAC in the locally-administered, unicast address space
+(U/L bit set, multicast bit clear, remaining bytes random) - guaranteed
+never to collide with a real assigned OUI. Pass an explicit MAC to override.
 
 Connection settings are read from scripts/config.ini.
 """
@@ -29,6 +34,7 @@ Connection settings are read from scripts/config.ini.
 import argparse
 import os
 import re
+import secrets
 import subprocess
 import tempfile
 import zlib
@@ -87,9 +93,26 @@ def _build_factory(mac: bytes, board: BoardConfig) -> bytes:
     return _wifi_build_factory(mac, board.wifi, parse_wifi_cal_size())
 
 
+def random_mac() -> bytes:
+    """Generate a MAC in the locally-administered, unicast address space.
+
+    Setting the U/L bit and clearing the multicast bit on the first octet
+    (the same scheme QEMU, libvirt, and Docker use for generated MACs)
+    guarantees the result can never collide with a real, globally-assigned
+    OUI; the remaining five bytes are uniformly random.
+    """
+    mac = bytearray(secrets.token_bytes(6))
+    mac[0] = (mac[0] & 0xFC) | 0x02
+    return bytes(mac)
+
+
 def parse_mac(s: str) -> bytes:
+    if s.strip().lower() == "random":
+        mac = random_mac()
+        log(f"Generated random MAC: {':'.join(f'{b:02x}' for b in mac)}")
+        return mac
     if not re.fullmatch(r"([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", s):
-        raise argparse.ArgumentTypeError(f"expected XX:XX:XX:XX:XX:XX, got {s!r}")
+        raise argparse.ArgumentTypeError(f"expected XX:XX:XX:XX:XX:XX or 'random', got {s!r}")
     mac = bytes(int(x, 16) for x in s.split(":"))
     if mac == b"\x00" * 6:
         raise argparse.ArgumentTypeError("MAC must not be all zeros")
@@ -240,8 +263,9 @@ def main():
     p.add_argument("--full-erase", action="store_true",
                    help="JTAG: erase entire chip; mutually exclusive with partition flags")
     p.add_argument("--mac", type=parse_mac, default=None,
-                   metavar="XX:XX:XX:XX:XX:XX",
-                   help="WiFi MAC address (required when flashing the factory partition)")
+                   metavar="XX:XX:XX:XX:XX:XX|random",
+                   help="WiFi MAC address; defaults to a freshly generated locally-administered "
+                        "'random' MAC when flashing the factory partition")
 
     sel = p.add_argument_group("partition selection (at least one required, except with --full-erase)")
     sel.add_argument("--all",        action="store_true", help="flash all partitions")
@@ -261,7 +285,7 @@ def main():
         args.u_boot = args.u_boot_env = args.factory = args.recovery = True
 
     if args.factory and args.mac is None:
-        p.error("--mac XX:XX:XX:XX:XX:XX is required when flashing the factory (WiFi EEPROM) partition")
+        args.mac = parse_mac("random")
 
     mac = args.mac
 
