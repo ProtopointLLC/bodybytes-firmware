@@ -212,7 +212,7 @@ sync
 
 ## NOR Flash
 
-VoCore2 uses a Winbond W25Q256FV (32 MB, 64 KB erase blocks). Partition offsets (`u-boot` at `0x0`, `u-boot-env` at `0x40000`, `factory` at `0x50000`, `recovery` at `0x60000`) are identical to bodybytes; only total size and recovery end differ. `[board:vocore2]` in [`scripts/config.ini`](../scripts/config.ini) sets `nor_total_size_mb = 32` and `nor_chip_name = W25Q256FV` — `flash_nor_images.py --vocore2 --file` produces a 32 MB image with recovery capped at `0x1FA0000` (31.625 MB).
+VoCore2 uses a Winbond W25Q256FV (32 MB, 64 KB erase blocks). Partition offsets (`u-boot` at `0x0`, `u-boot-env` at `0x40000`, `factory` at `0x50000`, `recovery` at `0x60000`) are identical to bodybytes; only total size and recovery end differ. `[board:vocore2]` in [`scripts/config.ini`](../scripts/config.ini) sets `nor_total_size_mb = 32` and `nor_chip_name = W25Q256FV` — `flash_nor_images.py --vocore2 --file --mac XX:XX:XX:XX:XX:XX` produces a 32 MB image with recovery capped at `0x1FA0000` (31.625 MB). `--mac` is required since `--file` implies `--all`, which includes the factory partition.
 
 ### Factory EEPROM comparison
 

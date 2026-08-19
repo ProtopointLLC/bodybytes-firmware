@@ -2,39 +2,27 @@
 """
 Flash NOR partitions to bodybytes.
 
-Generates the u-boot-env and factory partitions on the fly; no pre-build
-step is required.  The u-boot-env partition is generated from bodybytes.env
-with the recovery_size variable patched to the exact size of the recovery
-binary, rounded up to NOR sector alignment.
+--jtag (default): load via JTAG into RAM, write via U-Boot sf commands.
+--file: assemble a NOR image to build/ instead (implies --all).
+  --minimal trims it after the last partition's actual data, for use with
+  --jtag --image instead of flashrom (not flashrom-writable otherwise).
 
-Two strategies (select with --jtag / --file):
-  --jtag   Load via JTAG into RAM, write via U-Boot sf commands (default)
-  --file   Assemble full NOR image and write to build/ (implies --all)
-           Then program manually: flashrom -p <prog> -c <chip> -w build/bodybytes_nor_image.bin
+--mac is always required explicitly when writing --factory - no random
+default. (On-device: bodybytes-provision set-mac random.)
 
-Prerequisites (JTAG):
-  1. U-Boot running at the => prompt (use boot_uboot_jtag.py to bring up a blank board)
-  2. Compiled U-Boot: u-boot/u-boot-with-spl.bin
-  3. OpenWrt recovery image at the path in scripts/config.ini [paths]->recovery_bin
+Prerequisites (JTAG): U-Boot at the => prompt (boot_uboot_jtag.py) and a
+compiled u-boot-with-spl.bin. Connection settings read from config.ini.
 
 Usage:
   flash_nor_images.py --bodybytes --full-erase
-  flash_nor_images.py --bodybytes --all
-  flash_nor_images.py --vocore2   --all --mac XX:XX:XX:XX:XX:XX
-  flash_nor_images.py --bodybytes --file --mac random
-
---mac defaults to 'random' whenever the factory partition is written: a
-freshly generated MAC in the locally-administered, unicast address space
-(U/L bit set, multicast bit clear, remaining bytes random) - guaranteed
-never to collide with a real assigned OUI. Pass an explicit MAC to override.
-
-Connection settings are read from scripts/config.ini.
+  flash_nor_images.py --bodybytes --all --mac XX:XX:XX:XX:XX:XX
+  flash_nor_images.py --bodybytes --file --minimal --mac XX:XX:XX:XX:XX:XX
+  flash_nor_images.py --bodybytes --jtag --image
 """
 
 import argparse
 import os
 import re
-import secrets
 import subprocess
 import tempfile
 import zlib
@@ -93,26 +81,9 @@ def _build_factory(mac: bytes, board: BoardConfig) -> bytes:
     return _wifi_build_factory(mac, board.wifi, parse_wifi_cal_size())
 
 
-def random_mac() -> bytes:
-    """Generate a MAC in the locally-administered, unicast address space.
-
-    Setting the U/L bit and clearing the multicast bit on the first octet
-    (the same scheme QEMU, libvirt, and Docker use for generated MACs)
-    guarantees the result can never collide with a real, globally-assigned
-    OUI; the remaining five bytes are uniformly random.
-    """
-    mac = bytearray(secrets.token_bytes(6))
-    mac[0] = (mac[0] & 0xFC) | 0x02
-    return bytes(mac)
-
-
 def parse_mac(s: str) -> bytes:
-    if s.strip().lower() == "random":
-        mac = random_mac()
-        log(f"Generated random MAC: {':'.join(f'{b:02x}' for b in mac)}")
-        return mac
     if not re.fullmatch(r"([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", s):
-        raise argparse.ArgumentTypeError(f"expected XX:XX:XX:XX:XX:XX or 'random', got {s!r}")
+        raise argparse.ArgumentTypeError(f"expected XX:XX:XX:XX:XX:XX, got {s!r}")
     mac = bytes(int(x, 16) for x in s.split(":"))
     if mac == b"\x00" * 6:
         raise argparse.ArgumentTypeError("MAC must not be all zeros")
@@ -226,8 +197,9 @@ def _probe_nor(uboot: UBoot, board: BoardConfig) -> None:
 
 # --- file strategy ---
 
-def _flash_file(selected: list[str], partitions: dict, board: BoardConfig) -> None:
+def _flash_file(selected: list[str], partitions: dict, board: BoardConfig, minimal: bool) -> None:
     img = bytearray(b"\xff" * board.nor_size)
+    end = 0
     for name in selected:
         data = partitions[name]["data"]
         offset = partitions[name]["offset"]
@@ -235,10 +207,18 @@ def _flash_file(selected: list[str], partitions: dict, board: BoardConfig) -> No
         if len(data) > part_size:
             err(f"'{name}' binary ({len(data):#x} B) exceeds partition ({part_size:#x} B)")
         img[offset:offset + len(data)] = data
+        end = max(end, offset + len(data))
+    if minimal:
+        img = img[:end]
+
     NOR_IMAGE.parent.mkdir(parents=True, exist_ok=True)
     NOR_IMAGE.write_bytes(img)
-    log(f"Written: {NOR_IMAGE}  ({len(img) // (1024 * 1024)} MB)")
-    log(f"Program with: flashrom -p {NOR_FLASHROM_PROG} -c {board.nor_chip_name} --force -w {NOR_IMAGE}")
+    log(f"Written: {NOR_IMAGE}  ({len(img) / (1024 * 1024):.1f} MB)")
+    if minimal:
+        log(f"Minimal image - not flashrom-writable. Flash with: "
+            f"flash_nor_images.py --{board.name} --jtag --image")
+    else:
+        log(f"Program with: flashrom -p {NOR_FLASHROM_PROG} -c {board.nor_chip_name} --force -w {NOR_IMAGE}")
 
 
 # --- main ---
@@ -257,17 +237,20 @@ def main():
     p.add_argument("--jtag", dest="strategy", action="store_const", const="jtag",
                    help="use JTAG + U-Boot sf (default)")
     p.add_argument("--file", dest="strategy", action="store_const", const="file",
-                   help=f"assemble full NOR image to {NOR_IMAGE} (implies --all)")
+                   help=f"assemble NOR image to {NOR_IMAGE} (implies --all)")
     p.set_defaults(strategy="jtag")
 
+    p.add_argument("--minimal", action="store_true",
+                   help="--file: trim image to actual data (not flashrom-writable; use --jtag --image)")
+    p.add_argument("--image", action="store_true",
+                   help=f"JTAG: flash {NOR_IMAGE} (config.ini [paths] nor_image) as one blob at offset 0")
     p.add_argument("--full-erase", action="store_true",
                    help="JTAG: erase entire chip; mutually exclusive with partition flags")
     p.add_argument("--mac", type=parse_mac, default=None,
-                   metavar="XX:XX:XX:XX:XX:XX|random",
-                   help="WiFi MAC address; defaults to a freshly generated locally-administered "
-                        "'random' MAC when flashing the factory partition")
+                   metavar="XX:XX:XX:XX:XX:XX",
+                   help="WiFi MAC; required for --factory, no random default")
 
-    sel = p.add_argument_group("partition selection (at least one required, except with --full-erase)")
+    sel = p.add_argument_group("partition selection (at least one required, except with --full-erase / --image)")
     sel.add_argument("--all",        action="store_true", help="flash all partitions")
     sel.add_argument("--u-boot",     action="store_true", help="flash u-boot-with-spl.bin")
     sel.add_argument("--u-boot-env", action="store_true", help="flash U-Boot env (recovery_size patched in)")
@@ -280,25 +263,36 @@ def main():
         p.error("--full-erase is mutually exclusive with partition selection flags")
     if args.full_erase and args.strategy == "file":
         p.error("--full-erase requires JTAG, not --file")
+    if args.minimal and args.strategy != "file":
+        p.error("--minimal requires --file")
+    if args.image and args.strategy == "file":
+        p.error("--image requires --jtag, not --file")
+    if args.image and (partition_flags or args.full_erase):
+        p.error("--image is mutually exclusive with --full-erase and partition selection flags")
+    if args.image and not NOR_IMAGE.exists():
+        p.error(f"--image: not found: {NOR_IMAGE} (config.ini [paths] nor_image)")
 
     if args.strategy == "file" or args.all:
         args.u_boot = args.u_boot_env = args.factory = args.recovery = True
 
     if args.factory and args.mac is None:
-        args.mac = parse_mac("random")
+        p.error("--mac is required when flashing the factory partition")
 
     mac = args.mac
 
     selected = [k for k in ["u-boot", "u-boot-env", "factory", "recovery"]
                 if getattr(args, k.replace("-", "_"))]
-    if not args.full_erase and not selected:
-        p.error("select at least one partition: --u-boot / --u-boot-env / --factory / --recovery / --all")
+    if not args.full_erase and not args.image and not selected:
+        p.error("select at least one partition: --u-boot / --u-boot-env / --factory / --recovery / --all / --image")
 
     board = load_board(args.board)
     log(f"Board: {board.name}  NOR: {board.nor_size // (1024 * 1024)} MB ({board.nor_chip_name})"
         f"  DRAM: {board.dram_size_mb} MB")
 
-    if not args.full_erase:
+    if args.image and NOR_IMAGE.stat().st_size > board.nor_size:
+        err(f"--image ({NOR_IMAGE.stat().st_size:#x} B) exceeds chip size ({board.nor_size:#x} B)")
+
+    if not args.full_erase and not args.image:
         blobs = _prepare_blobs(selected, mac, board)
         dts = parse_nor_partitions()
         partitions = {}
@@ -309,7 +303,7 @@ def main():
             partitions[label] = {"data": blobs.get(label, b""), "offset": offset, "size": size}
 
     if args.strategy == "file":
-        _flash_file(selected, partitions, board)
+        _flash_file(selected, partitions, board, args.minimal)
         log("Done")
         return
 
@@ -349,6 +343,13 @@ def main():
             out = _ub(uboot, f"sf erase 0 {board.nor_size:#x}", timeout=600)
             if "OK" not in out:
                 err("sf erase failed")
+        elif args.image:
+            _flash_jtag(
+                openocd, uboot,
+                label=NOR_IMAGE.name,
+                data=NOR_IMAGE.read_bytes(),
+                flash_offset=0,
+            )
         else:
             for name in selected:
                 data = partitions[name]["data"]

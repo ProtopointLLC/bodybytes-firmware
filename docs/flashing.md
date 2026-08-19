@@ -84,13 +84,15 @@ Expected bodybytes field values:
 
 The script generates a 1 KB blob: chip ID `0x7628` LE at `0x00`, 6-byte MAC at `0x04`, zeros from `0x0a`–`0x3FF` (left for eFuse merge at boot). Embedded at the start of the 64 KB `factory` region; remainder is `0xFF`.
 
-**`--mac random`** (the default whenever the factory partition is written and `--mac` is omitted): generates a MAC in the locally-administered, unicast address space — the U/L bit set and the multicast bit cleared on the first octet, the remaining five bytes uniformly random (the same scheme QEMU/libvirt/Docker use for generated MACs). This range can never collide with a real IEEE-assigned OUI, so no registration or allocation bookkeeping is needed to avoid stepping on another vendor's address; the 40 bits of remaining entropy make an accidental collision between two bodybytes units negligible. Pass an explicit `XX:XX:XX:XX:XX:XX` instead when a specific MAC is required (e.g. matching an existing DHCP reservation). MAC generation is host-side only: the on-device [`bodybytes-provision`](openwrt.md#board-profiles) script (for re-provisioning a MAC after initial flashing, from NOR recovery) always requires an explicit `--mac XX:XX:XX:XX:XX:XX` — generate one here first if needed.
+`--mac` is always required, explicitly, whenever the factory partition is written — `flash_nor_images.py` has no random/auto-generated default; omitting it (or passing `random`) is a hard argparse error. This is deliberate: a script whose output is meant to be reproducible and reviewable (see [§7](#7---collecting-release-binaries)) shouldn't silently mint a different MAC on every run. Pass an explicit `XX:XX:XX:XX:XX:XX` in the locally-administered, unicast address space — the U/L bit set and the multicast bit cleared on the first octet (the same scheme QEMU/libvirt/Docker use for generated MACs) — to guarantee it can never collide with a real IEEE-assigned OUI.
+
+Random generation instead lives entirely on-device: [`bodybytes-provision set-mac random`](openwrt.md#board-profiles) generates one with the identical address-space policy (U/L bit set, multicast bit clear) using `/dev/urandom`, for re-provisioning a MAC after initial flashing without needing a host machine at all.
 
 ---
 
 ## 3 - Assemble full NOR image (CH341A only)
 
-For CH341A programming, run from the repo root in the dev shell (`nix develop .#uboot`): `scripts/flash_nor_images.py --bodybytes --file`. `--file` implies `--all`; since that includes the factory partition, `--mac` defaults to a freshly generated `random` MAC (locally-administered, unicast — see §2c) if not given explicitly. The script generates `build/bodybytes_nor_image.bin` (all gaps `0xFF`) and prints the exact `flashrom -p ch341a_spi ...` command. Contents:
+For CH341A programming, run from the repo root in the dev shell (`nix develop .#uboot`): `scripts/flash_nor_images.py --bodybytes --file --mac XX:XX:XX:XX:XX:XX`. `--file` implies `--all`; since that includes the factory partition, `--mac` is required (see §2c). The script generates `build/bodybytes_nor_image.bin` (all gaps `0xFF`) and prints the exact `flashrom -p ch341a_spi ...` command. Contents:
 
 | Offset | Content |
 |--------|---------|
@@ -117,7 +119,7 @@ Do not continue until U-Boot runs correctly from RAM.
 
 ### 4b - Full NOR programming (first-time / production)
 
-With U-Boot at its prompt, first run `scripts/flash_nor_images.py --bodybytes --full-erase` to wipe the chip, then `--bodybytes --all` to write all partitions (add `--mac AA:BB:CC:DD:EE:FF` to assign a specific WiFi MAC instead of a freshly generated random one). (`--full-erase` and partition flags are mutually exclusive — two separate runs.) `--all` loads each binary via JTAG and writes to NOR at offsets from the U-Boot DTB; because it includes the factory partition, `--mac` defaults to `random` (see §2c) if omitted.
+With U-Boot at its prompt, first run `scripts/flash_nor_images.py --bodybytes --full-erase` to wipe the chip, then `--bodybytes --all --mac AA:BB:CC:DD:EE:FF` to write all partitions. (`--full-erase` and partition flags are mutually exclusive — two separate runs.) `--all` loads each binary via JTAG and writes to NOR at offsets from the U-Boot DTB; because it includes the factory partition, `--mac` is required (see §2c).
 
 **VS Code task:** _JTAG: Flash NOR_ runs `--all` with _JTAG: Start OpenOCD J-Link_ as a prerequisite. Run `--full-erase` manually first if needed.
 
@@ -125,7 +127,7 @@ With U-Boot at its prompt, first run `scripts/flash_nor_images.py --bodybytes --
 
 ### 4c - Incremental update (development)
 
-To re-flash individual partitions without a full chip erase, pass partition flags: `--u-boot`, `--recovery`, or multiple together (e.g. `--u-boot-env --factory`, or `--u-boot-env --factory --mac AA:BB:CC:DD:EE:FF` for a specific MAC). With `--factory` and no explicit `--mac`, a fresh `random` MAC is generated (see §2c). Each partition is erased to its DTS-defined size before writing. After flashing `--u-boot-env`, run `saveenv` at the U-Boot prompt on next boot to restore compiled-in defaults. Power-cycle to boot from updated NOR.
+To re-flash individual partitions without a full chip erase, pass partition flags: `--u-boot`, `--recovery`, or multiple together (e.g. `--u-boot-env --factory --mac AA:BB:CC:DD:EE:FF`). `--factory` requires an explicit `--mac` (see §2c). Each partition is erased to its DTS-defined size before writing. After flashing `--u-boot-env`, run `saveenv` at the U-Boot prompt on next boot to restore compiled-in defaults. Power-cycle to boot from updated NOR.
 
 ### 4d - Verify NOR boot
 
@@ -247,3 +249,55 @@ Key points relevant to flashing:
 - A blank or corrupt env partition falls back to the compiled-in defaults automatically.
 - The NOR env partition is `read-only` in the OpenWrt DTS; `fw_setenv` cannot write to it without loading `kmod-mtd-rw`. The compiled-in env is the authoritative copy.
 - To manually persist a change after modifying a variable at the U-Boot prompt, run `saveenv`.
+
+---
+
+## 7 - Collecting release binaries
+
+[`scripts/collect_binaries.sh`](../scripts/collect_binaries.sh) gathers everything needed to distribute or hand off a build, into `build/` (run from the repo root inside the dev shell: `nix develop .#uboot -c ./scripts/collect_binaries.sh`):
+
+- `openwrt-sysupgrade.bin` — the OpenWrt main image, for in-place OS updates via LuCI once the device is running from eMMC; unrelated to NOR flashing
+- `u-boot-ram.bin` — copy of `u-boot/u-boot.bin`, what [`boot_uboot_jtag.py`](../scripts/boot_uboot_jtag.py) needs to bring U-Boot up in RAM over JTAG before any of the below
+- a **minimal composite NOR image** per board (`firmware-minimal-bodybytes.bin`, `firmware-minimal-vocore2.bin`) — built with `--file --minimal`, which trims the image right after the last selected partition's actual data (§1b) instead of padding to the full chip size; ~13.5 MB rather than the chip's full 32/64 MB, since it ends shortly after `recovery`'s real (compressed, ~13.1 MB) length, not its declared (~63.6 MB) partition size. Already has U-Boot, env, factory, and recovery baked in. **Not** flashrom-writable (wrong length for a whole-chip `-w`) — flash it via JTAG instead, over two steps:
+
+  1. In `scripts/config.ini`'s `[paths]`, **comment out** the active `nor_image = build/bodybytes_nor_image.bin` line and **uncomment** one of the two alternates already provided below it (`build/firmware-minimal-bodybytes.bin` / `...-vocore2.bin`), or point it wherever else you put the file. Only one `nor_image` line may be active at a time — leaving two uncommented is a config parse error, not "last one wins."
+  2. `flash_nor_images.py --<board> --jtag --image` — `--image` takes no path argument; it always reads whatever `nor_image` currently points to and writes it as a single blob at NOR offset 0 via `sf update`.
+
+  This is the path for someone with JTAG hardware but no build toolchain: no DTB parsing, no per-partition flags, one config edit, one command. Both images use a **fixed** placeholder MAC (`AA:BB:CC:DD:EE:01` for both, currently — see the script) so the collected assets are reproducible byte-for-byte across runs; reprovision a real MAC (`bodybytes-provision set-mac random` or an explicit MAC, from NOR recovery) before putting more than one flashed-from-this-asset unit on the same network. Baking in a real MAC from the start instead means building your own composite with `--mac`.
+
+### 7a - Using the release binaries (no build required)
+
+This is the end-to-end flow for a manufacturer or end user starting from just the files `collect_binaries.sh` produces (e.g. downloaded from a GitHub release) — no U-Boot or OpenWrt build, no submodules.
+
+**What you need**
+
+- This repo, cloned — `git clone <repo-url>`. **Do not** `--recurse-submodules`; the `u-boot/`/`openwrt/` submodules are never read by this flow, so there is nothing to build.
+- [Nix](https://nixos.org/download) installed, for the dev shell that provides OpenOCD, Python (with `pyserial`/`pyfdt`), and `picocom`. This is a one-time toolchain fetch, not a build of this project.
+- The four release files, placed in `build/` inside your clone: `u-boot-ram.bin`, `firmware-minimal-<board>.bin` (one per board you're flashing), and `openwrt-sysupgrade.bin`.
+- JTAG hardware wired per [jtag.md](jtag.md) §Wiring. A CH341A + `flashrom` alone will **not** work here — see §7, the composite image is deliberately not flashrom-writable.
+
+**Steps**
+
+1. Point `scripts/config.ini` at the collected files — for each of the two keys below, comment out the currently-active line and uncomment the alternate that's already provided directly beneath it (never leave two lines active for the same key — see §7 step 1):
+   - `[paths]` `uboot_ram_bin` → `build/u-boot-ram.bin`
+   - `[paths]` `nor_image` → `build/firmware-minimal-<board>.bin`
+2. `nix develop .#uboot` — fetches the toolchain (first run only takes a while; nothing here compiles bodybytes firmware).
+3. Connect JTAG (see [jtag.md](jtag.md) §1-2), then bring U-Boot up in RAM:
+   ```sh
+   ./scripts/start_openocd_jlink.py --<board>
+   ./scripts/boot_uboot_jtag.py --<board>
+   ```
+   Wait for the `=>` prompt on the serial console (UART2, 115200 8N1) before continuing.
+4. Flash the composite image:
+   ```sh
+   ./scripts/flash_nor_images.py --<board> --jtag --image
+   ```
+5. Power-cycle the board. It boots into the NOR recovery AP (default SSID `bodybytes-recovery-<mac>`, root password `recovery`).
+6. Reprovision a unique MAC — every unit flashed from the same release file otherwise shares the same fixed placeholder MAC:
+   ```sh
+   ssh root@bodybytes.local
+   bodybytes-provision set-mac random
+   ```
+7. Install the main OS onto eMMC: continue from [§5b](#5b--first-install-from-nor-recovery), uploading `openwrt-sysupgrade.bin` as the sysupgrade image via LuCI.
+
+`flash_nor_images.py --file` always writes to the single path in `config.ini`'s `nor_image` (default `build/bodybytes_nor_image.bin`) regardless of `--board`; `collect_binaries.sh` renames each run's output before starting the next so the vocore2 pass doesn't clobber the bodybytes one, and leaves `nor_image` itself untouched — you point it at whichever collected file you actually want to flash.
