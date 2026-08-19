@@ -224,6 +224,8 @@ The MediaTek port resolves this with a cache-as-SRAM trick, driven by `SOC_MT762
 
 **DRAM type and size are auto-detected at runtime.** `mt7628_ddr_init()` reads SYSCFG0 for DDR type, CHIP_REV_ID for package (KN forces DDR1), and CLKCFG0 for 160/200 MHz timing tables. No board-specific DRAM configuration is required.
 
+**Deliberately no SPL image CRC check:** `CONFIG_SPL_LEGACY_IMAGE_CRC_CHECK` is left unset, so `spl_parse_image_header()` only checks the legacy uImage magic byte before jumping into U-Boot proper, not the header/data CRC. With no redundant copy to fall back to, a strict CRC check would only turn a corrupted-but-still-partially-working image into a guaranteed hard stop. Leaving it off gives a corrupted image a chance to still boot far enough to reach Linux, where the escape hatch (`kmod-mtd-rw`, see [openwrt.md - Escape hatch](openwrt.md#spi-nor-flash---spi0)) lets a user reflash NOR without JTAG — a real, if unreliable, self-service recovery path that a hard CRC failure would foreclose entirely.
+
 ### eMMC DTS
 
 The MT7628 RFB DTS configures the MMC node for a removable SD card. The bodybytes DTS adapts it for a soldered eMMC:
