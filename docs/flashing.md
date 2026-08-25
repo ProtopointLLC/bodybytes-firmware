@@ -33,7 +33,7 @@ Holds a 1 KB WiFi EEPROM blob at the start; remaining 63 KB is 0xFF. The DTS exp
 
 **`recovery` (0x060000, 63.625 MB)**
 
-OpenWrt initramfs kernel, stored read-only. When U-Boot detects the recovery trigger (GPIO#14 low) it runs `boot_sf` → `fit_load_sf`: `sf probe` switches to 4-byte addressing, reads one block to parse the FIT header, reads the full image to `${dram_staging}`, and `bootm` boots from RAM. The initramfs is self-contained (kernel + rootfs in one FIT image); the recovery system runs entirely in RAM and cannot modify NOR, making it safe to repair a broken eMMC.
+OpenWrt initramfs kernel, stored read-only. When U-Boot detects the recovery trigger (GPIO#14 low) it runs `boot_sf` → `fit_load_sf`: `sf probe` switches to 4-byte addressing, reads one block to parse the FIT header, reads the full image to `${dram_staging}`, and `bootm` boots from RAM. The initramfs is self-contained (kernel + rootfs in one FIT image); it runs entirely in RAM independent of eMMC state, which is what makes it usable to repair a broken eMMC install. Booting into recovery does not itself write to NOR, but the recovery profile deliberately ships `kmod-mtd-rw` and `bodybytes-provision` so NOR can be modified on request once recovery is running — see [openwrt.md - Escape hatch](openwrt.md#spi-nor-flash---spi0) and [security.md](security.md#recovery).
 
 The partition spans the EAR (Extended Address Register) boundary at 16 MB. `sf read` with `CONFIG_SPI_FLASH_BAR=y` updates the EAR before each cross-boundary read and can address all four 16 MB regions transparently. Only the FIT-indicated bytes are transferred.
 
@@ -152,7 +152,7 @@ All four partitions use the "Linux filesystem" GPT type GUID (`0FC63DAF…`), se
 | 1 | `kernel` | none (raw) | 32 MB | Raw FIT image (gzip kernel + DTB); written by sysupgrade via `dd`; read by U-Boot via `mmc read` |
 | 2 | `rootfs` | none (raw) | 512 MB | Raw squashfs rootfs; written by sysupgrade via `dd`; mounted read-only by the kernel |
 | 3 | `rootfs_data` | f2fs (auto) | 4 GB | Overlay for OpenWrt packages and config; **not** formatted at install — `mount_root` creates it as F2FS (flash-friendly log-structured fs — better suited than ext4 to the overlay's small random writes, less write amplification/wear on the eMMC) on first boot, then auto-mounts it at `/overlay` by GPT label every boot |
-| 4 | `data` | ext4 | ~123.5 GB (remainder) | User file storage; auto-mounted at `/mnt/data` by block-mount. Deliberately ext4 (not F2FS like the overlay): this partition holds irreplaceable user data, so journaling recovery and mature `e2fsck` tooling to salvage it after a power cut matter more than the overlay's flash-write optimization |
+| 4 | `data` | ext4 | ~123.5 GB (remainder) | User file storage; auto-mounted at `/mnt/data` by block-mount. Deliberately ext4 (not F2FS like the overlay): this partition holds irreplaceable user data, so journaling recovery and mature `e2fsck` tooling to salvage it after a power cut matter more than the overlay's flash-write optimization. Unencrypted by default — see [security.md - Data confidentiality](security.md#6---data-confidentiality) |
 
 `kernel` and `rootfs` are raw — no filesystem, written by sysupgrade via `dd`. `fit_load_mmc` reads one block to parse the FIT header, then reads exactly `fit_size` blocks; `bootm` decompresses the kernel, applies DTB fixups, and boots. `root=/dev/mmcblk0p2 rootwait` in `chosen/bootargs` points the kernel to the squashfs rootfs.
 
@@ -164,7 +164,7 @@ The NOR recovery image (initramfs) includes `parted` (a dependency of `bodybytes
 
 **Step 1 - boot NOR recovery**
 
-Hold the magnet against the hall-effect sensor during power-on. U-Boot detects GPIO#14 low and runs `boot_sf` (via `boot_selected`), booting the initramfs from NOR. The device comes up as a standard OpenWrt AP; connect to its WiFi network and SSH in as root (default password is `bodybytes`).
+Hold the magnet against the hall-effect sensor during power-on. U-Boot detects GPIO#14 low and runs `boot_sf` (via `boot_selected`), booting the initramfs from NOR. The device comes up as a standard OpenWrt AP; connect to its WiFi network and SSH in as root (default password is `bodybytes`). This recovery password is fixed and public by design — see [security.md - Recovery credentials](security.md#recovery-credentials).
 
 **Optional - set the WiFi MAC and/or branding**
 

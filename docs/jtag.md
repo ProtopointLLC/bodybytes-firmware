@@ -1,5 +1,7 @@
 # MT7628AN JTAG - J-Link EDU Mini V2
 
+JTAG is physical, low-level access outside the normal software security boundary — see [security.md - JTAG and direct hardware access](security.md#jtag-and-direct-hardware-access).
+
 ## Hardware
 
 | Component | Details |

@@ -40,7 +40,7 @@ The firmware runs OpenWrt as a standalone WiFi AP with no wired uplink. All serv
 
 **HTTPS admin (LuCI)**
 
-Reachable at `https://bodybytes.local`, `https://192.168.1.1`, or `https://fd13:37be:ef00::1`. EC P-256 self-signed certificate generated on first boot; all three access paths are covered by SANs so the browser only needs to accept the cert once.
+Reachable at `https://bodybytes.local`, `https://192.168.1.1`, or `https://fd13:37be:ef00::1`. EC P-256 self-signed certificate generated on first boot; all three access paths are covered by SANs so the browser only needs to accept the cert once. See [docs/security.md](docs/security.md#8---tls) for the trust model this implies.
 
 **File sharing (Samba)**
 
@@ -48,7 +48,7 @@ Reachable at `https://bodybytes.local`, `https://192.168.1.1`, or `https://fd13:
 
 **File sharing (dufs)**
 
-Browser-based alternative to Samba, reachable at `https://bodybytes.local:5000/`. `/public` is open, read-write, no login. `/protected` requires login (`bodybytes`/`bodybytes` by default — change before deployment) and is also read-write. Nothing else on the `data` partition is reachable through dufs — only these two paths.
+Browser-based alternative to Samba, reachable at `https://bodybytes.local:5000/`. `/public` is open, read-write, no login. `/protected` requires login (`bodybytes`/`bodybytes` by default — change before deployment) and is also read-write. Nothing else on the `data` partition is reachable through dufs — only these two paths. See [docs/security.md](docs/security.md#9---provisioning-checklists) for the full pre-use checklist, including which defaults must be changed.
 
 ## Development with VoCore2
 
@@ -63,3 +63,4 @@ The [VoCore2](https://vocore.io/v2.html) module uses the same MT7628AN SoC and c
 - [docs/openwrt.md](docs/openwrt.md) - OpenWrt board files, DTS, and package reference (includes Travelmate WiFi uplink / hybrid AP+STA relay)
 - [docs/wifi.md](docs/wifi.md) - WiFi EEPROM register map and calibration profile
 - [docs/vocore2.md](docs/vocore2.md) - VoCore2 as development proxy: hardware differences, JTAG, NOR/eMMC, WiFi EEPROM calibration
+- [docs/security.md](docs/security.md) - security model, trust boundaries, party responsibilities, provisioning checklists
