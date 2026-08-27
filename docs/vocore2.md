@@ -87,7 +87,7 @@ VoCore2 has PORST\_N wired to J6 pin 10. Use `trst_and_srst` with `connect_asser
 scripts/start_openocd_jlink.py --vocore2
 ```
 
-This uses `reset_config trst_and_srst separate srst_nogate connect_assert_srst`, issues `reset halt` after `init`, and waits up to 5 s. Ctrl-C terminates OpenOCD directly.
+With `hardware_reset = true` in `[board:vocore2]` (see [`scripts/config.ini`](../scripts/config.ini)), this derives `reset_config trst_and_srst separate srst_nogate connect_assert_srst` and issues `reset halt` after `init`, waiting up to 5 s. Ctrl-C terminates OpenOCD directly.
 
 Bodybytes has no PORST\_N on its JTAG connector and uses a different reset\_config - see [jtag.md](jtag.md) (run without `--vocore2`).
 
@@ -104,7 +104,7 @@ mww 0x81000000 0xdeadbeef
 mdw 0x81000000
 ```
 
-All other steps (PLL init, work area, verify) are identical to [jtag.md §2](jtag.md#step-2--bootstrap-pll-and-dram).
+All other steps (PLL init, work area, verify) are identical to [jtag.md §2](jtag.md#step-2---bootstrap-pll-dram-and-boot-u-boot).
 
 ### Quick boot shortcut
 
@@ -129,7 +129,7 @@ When running bodybytes U-Boot (`CONFIG_CONS_INDEX=3`, `UART2_MODE=0`, `ephy_iot_
 | UART2 TX | P2TP | adapter RX |
 | UART2 RX | P2TN | adapter TX |
 
-115200 8N1.
+**921600 8N1** when running the bodybytes U-Boot, which VoCore2 shares (`CONFIG_BAUDRATE=921600`).
 
 ### Stock VoCore2 UART2 is on different pins
 
@@ -195,7 +195,7 @@ The fix is to **lower `max-frequency`** in both device trees — they must match
 
 On VoCore2, the Hardkernel eMMC module can be removed from the reader board and plugged directly into a PC for partitioning and flashing - no JTAG or U-Boot needed. The reader board appears as a USB mass storage device.
 
-Follow the same wipe, partition, and format steps as [flashing.md §5b](flashing.md#5b--first-install-from-nor-recovery), substituting `/dev/sdX` for `/dev/mmcblk0` (and `/dev/sdXN` for `/dev/mmcblk0pN`). Skip the `reboot` at the end — it is not needed when working from a PC.
+Follow the same wipe, partition, and format steps as [flashing.md §5b](flashing.md#5b---first-install-from-nor-recovery), substituting `/dev/sdX` for `/dev/mmcblk0` (and `/dev/sdXN` for `/dev/mmcblk0pN`). Skip the `reboot` at the end — it is not needed when working from a PC.
 
 Then install the firmware directly from `sysupgrade.bin`:
 

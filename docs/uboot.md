@@ -133,7 +133,7 @@ A blank or corrupt env partition falls back to compiled-in defaults — the devi
 |----------|---------------|----------------|
 | SYSCTL MEMO2 | `0xb000006c` (KSEG1) | `0x1000006c` |
 
-The mechanism integrates with the sysupgrade flow (see [openwrt.md - Sysupgrade](openwrt.md#sysupgrade)):
+The mechanism integrates with the sysupgrade flow (see [openwrt.md - Sysupgrade](openwrt.md#2---sysupgrade)):
 
 | Step | Actor | Action |
 |------|-------|--------|
@@ -164,7 +164,7 @@ The eMMC uses a GPT partition layout. Four additional options are set in [`u-boo
 | `CONFIG_EFI_PARTITION=y` | GPT partition table parsing in the MMC layer |
 | `CONFIG_PARTITION_UUIDS=y` | UUID support required by GPT code paths |
 | `CONFIG_CMD_PART=y` | `part start` / `part size` commands; used in `fit_load_mmc` to locate the `kernel` GPT partition |
-| `CONFIG_CMD_GPT=y` | `gpt write` command; available for ad-hoc partitioning from the U-Boot prompt (primary install uses `parted` from NOR recovery - see [flashing.md §5b](flashing.md#5b--first-install-from-nor-recovery)) |
+| `CONFIG_CMD_GPT=y` | `gpt write` command; available for ad-hoc partitioning from the U-Boot prompt (primary install uses `parted` from NOR recovery - see [flashing.md §5b](flashing.md#5b---first-install-from-nor-recovery)) |
 
 > **JTAG must be off for SD/eMMC.** SD/eMMC runs on the EPHY pads, and enabling CPU JTAG (`UART_TXD1`/`DBG_JTAG_MODE` strapped low) puts that block into a debug state that breaks the bus — the two are mutually exclusive. Strap `UART_TXD1` high (GPIO mode, the normal/eMMC configuration) except when actively flashing over JTAG. Full explanation: [jtag.md](jtag.md#jtag-and-sdemmc-are-mutually-exclusive).
 

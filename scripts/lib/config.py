@@ -55,8 +55,7 @@ class BoardConfig:
     dram_size_mb: int
     nor_size: int
     nor_chip_name: str
-    reset_config: str
-    halt_cmd: str
+    hardware_reset: bool
     emmc_capacity_gb: int
     # wifi_* overrides from config.ini; key = register name without the 'wifi_' prefix.
     # Absent keys use the reset / default values defined in lib/wifi.py.
@@ -83,8 +82,7 @@ def load_board(name: str) -> BoardConfig:
         dram_size_mb=int(s["dram_size_mb"]),
         nor_size=int(s["nor_total_size_mb"]) * 1024 * 1024,
         nor_chip_name=s["nor_chip_name"],
-        reset_config=s["reset_config"],
-        halt_cmd=s["halt_cmd"],
+        hardware_reset=s.getboolean("hardware_reset"),
         emmc_capacity_gb=int(s.get("emmc_capacity_gb", "0")),
         wifi=_load_wifi_overrides(s),
     )

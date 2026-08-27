@@ -21,6 +21,42 @@ JTAG is physical, low-level access outside the normal software security boundary
 | Expected IDCODE | `0x1762824f` |
 | Target type | `mips_m4k` (little-endian) |
 
+## OpenOCD: SRST wiring decides which mode you get
+
+Which reset lines are wired decides which EJTAG transport works afterwards. Check which column you are in before debugging anything else.
+
+| | **SRST wired** | **TRST only** |
+|---|---|---|
+| Board profile | `hardware_reset = true` | `hardware_reset = false` |
+| `reset_config` | `trst_and_srst` | `trst_only` |
+| Attach lands at | reset vector, `0x9c000000` | arbitrary PC in running firmware |
+| FASTDATA bulk write | works, ~59 KiB/s | **disabled** - PRACC fallback, ~2 KiB/s |
+| OpenOCD | stock 0.12.0 is correct | needs `mips32 ejtag_all_quirk on` |
+| U-Boot (484 KB) to DRAM | ~8 s | ~230 s |
+
+**Prefer SRST wherever the board exposes it** - it is stock, and ~29x faster for bulk transfers. **bodybytes is TRST-only**: `PORST_N` is not brought out to the JTAG header (see [§Reset Signals](#reset-signals)), so this board always takes the second column.
+
+Without SRST, `halt` catches the CPU in a state where selecting the EJTAG CONTROL, ADDRESS and DATA registers *individually* corrupts TAP state. The dev shell's OpenOCD can route halted-mode access through the combined 96-bit ALL register instead, at the cost of FASTDATA. It is **off by default**, so SRST-wired debugging is unaffected:
+
+```
+mips32 ejtag_all_quirk [on|off]
+```
+
+[`start_openocd_jlink.py`](../scripts/start_openocd_jlink.py) sets it from the board profile and prints the choice at startup:
+
+```
+[Info] hardware_reset : False
+[Info] reset_config   : trst_only
+[Info] ejtag_all_quirk: on (no SRST - ALL register, FASTDATA disabled)
+```
+
+With the quirk on, two things are expected and are **not** errors:
+
+- `Fastdata access Failed` / `Falling back to non-bulk write` on every `load_image`.
+- Bulk writes at ~2 KiB/s, so loading U-Boot to DRAM takes ~4 minutes instead of ~8 seconds. For multi-megabyte payloads use [`flash_nor_images.py --ymodem`](flashing.md#4c-2---serial-only-update-over-ymodem-no-jtag) rather than JTAG - the ~13 MB OpenWrt recovery image would take roughly 1.8 hours over JTAG in this mode.
+
+Why the workaround is needed, the per-profile attach sequences, and how to change the OpenOCD it lives in: [§MT7628 EJTAG workaround](#mt7628-ejtag-workaround---background).
+
 ## Wiring - Board Connector → J-Link EDU Mini V2
 
 Reference: <https://kb.segger.com/9-pin_JTAG/SWD_connector>
@@ -121,7 +157,7 @@ scripts/start_openocd_jlink.py --bodybytes
 
 `trst_only` - bodybytes has no PORST\_N on the JTAG connector. OpenOCD can reset the TAP (JTRST\_N) but not the SoC. Power the board first, then connect OpenOCD. `halt` sends a debug request to the running CPU rather than forcing it to a clean reset entry point.
 
-The script reads `reset_config` and `halt_cmd` from the board profile in [`scripts/config.ini`](../scripts/config.ini) (`[board:bodybytes]`: `trst_only` / `halt`), issues the halt command after `init`, and waits up to 5 s for the CPU to halt. Ctrl-C terminates OpenOCD directly.
+The script reads `hardware_reset` from the board profile in [`scripts/config.ini`](../scripts/config.ini) (`[board:bodybytes]`: `false`, since there's no PORST\_N to drive) and derives `reset_config trst_only` plus a plain `halt` after `init`, waiting up to 5 s for the CPU to halt. Ctrl-C terminates OpenOCD directly.
 
 Expected output:
 
@@ -215,15 +251,126 @@ For the PLL and DRAM details see the comments in [`openocd/mt7628.cfg`](../openo
 
 ## Step 3 - Flash NOR
 
-Continue with [flashing.md §4b](flashing.md#4b--full-nor-programming-first-time--production).
+Continue with [flashing.md §4b](flashing.md#4b---full-nor-programming-first-time--production).
 
 ---
 
 ## Flash Map
 
-See [flashing.md §1a](flashing.md#1a--partition-map) for the full NOR partition map and [flashing.md §5a](flashing.md#5a--gpt-partition-layout) for the eMMC GPT layout.
+See [flashing.md §1a](flashing.md#1a---partition-map) for the full NOR partition map and [flashing.md §5a](flashing.md#5a---gpt-partition-layout) for the eMMC GPT layout.
 
 SPI NOR is at physical `0x1c000000`, accessible to the CPU at `0x9c000000` (KSEG0 cached) or `0xbc000000` (KSEG1 uncached). Use `0xbc000000 + <nor_offset>` for direct JTAG memory reads (e.g. `mdw 0xbc050000 4` to read the first 16 bytes of the factory partition).
+
+---
+
+## MT7628 EJTAG workaround - background
+
+Everything needed to *use* JTAG is [above](#openocd-srst-wiring-decides-which-mode-you-get). This section covers what the modified OpenOCD does, how the two attach sequences are built, and the constraints anyone editing it has to respect.
+
+### Where the code lives
+
+`flake.nix` builds OpenOCD from a fork, pinned by commit rather than by branch:
+
+    https://github.com/ProtopointLLC/bobybytes-openocd   branch: bodybytes
+
+The branch is exactly the `v0.12.0` tag plus **one** commit. Keeping it to a single commit is deliberate - it stays readable as a diff against a known-good release, and `git diff v0.12.0..bodybytes` is the whole change.
+
+Building from git rather than the release tarball means `./configure` has to be bootstrapped and the `jimtcl` / `libjaylink` submodules fetched; `flake.nix` handles both (`autoreconfHook`, `fetchSubmodules = true`). The reported version becomes `0.12.0-snapshot` instead of `0.12.0` - cosmetic, and the expected result of building a checkout.
+
+### What the change does
+
+Two defects on the no-SRST path, one fixed and one refused:
+
+| | Symptom | Resolution |
+|---|---|---|
+| **Standalone EJTAG registers** | Selecting CONTROL / ADDRESS / DATA individually while halted corrupts TAP state | **Fixed** - route every halted-mode transaction through the 96-bit ALL register (`EJTAG_INST_ALL`, IR `0x0b`), so `wait_for_pracc_rw()` is never reached |
+| **FASTDATA** | Bulk writes report complete success while writing nothing to DRAM | **Refused** - `mips32_pracc_fastdata_xfer()` returns `ERROR_TARGET_RESOURCE_NOT_AVAILABLE` so `mips_m4k_bulk_write_memory()` falls back to slow-but-correct PRACC writes |
+
+Both are gated on `ejtag_all_quirk`. With it off, every code path is stock, FASTDATA included.
+
+### Attach sequences differ, and they are not interchangeable
+
+The two modes need genuinely different OpenOCD startup sequences, so `start_openocd_jlink.py` emits one or the other rather than a shared one:
+
+```
+SRST wired                     TRST only
+----------                     ---------
+                               mips32 ejtag_all_quirk on
+                               mt7628.cpu0 configure -defer-examine
+init                           init
+                               poll off
+                               adapter assert trst / sleep / deassert
+                               mt7628.cpu0 arp_examine
+reset halt                     halt
+poll                           sleep 100
+halt
+wait_halt 5000                 wait_halt 5000
+```
+
+Without SRST, examination has to be deferred past `init` and run by hand after a manual TRST pulse - the CPU is running and examining it too early does not stick.
+
+### `reset halt` can report success without halting
+
+On the SRST path, `reset halt` prints a convincing halt line while leaving the CPU **out of Debug Mode**. EJTAG CONTROL comes back with `BRKST` (bit 3) clear, but OpenOCD has already cached `target->state` as halted:
+
+```
+> reset halt
+target halted in MIPS32 mode due to debug-request, pc: 0x87f806a8
+> targets
+ 0* mt7628.cpu0   mips_m4k   little   mt7628.cpu   running      <- not halted
+```
+
+with `CONTROL = 0x0000c000` - `PROBEN` set, `BRKST` clear.
+
+The cached state is what makes this bite. Every later `halt` no-ops ("target was already halted"), so nothing recovers it, and every memory access fails:
+
+```
+> mdw 0x10000000
+                                    <- no output at all
+> read_memory 0x10000000 32 1
+read_memory: read at 0x10000000 with width=32 and count=1 failed
+```
+
+Note that **`mdw` swallows the error** and prints nothing, which makes this much harder to recognise than it should be. Use `read_memory` when diagnosing - it reports the failure.
+
+The fix is one explicit `poll` after `reset halt`: it re-reads `BRKST` and corrects the cached state to `running`, so the `halt` that follows is a real one. Afterwards `CONTROL = 0x4004c008` (`BRKST` set) and memory reads work:
+
+```
+> mdw 0x10000000
+0x10000000: 3637544d
+```
+
+Check the PC too. After `reset halt` it must be `0x9c000000`; a PC in DRAM (`0x8xxxxxxx`) means SRST is not actually resetting the SoC despite the profile claiming it is - a wiring problem, not a software one. `boot_uboot_jtag.py` warns and continues in that case.
+
+### `-defer-examine` and `reset halt` are mutually exclusive
+
+The deferral the TRST-only path needs must never leak onto the SRST path. `arp_reset` un-examines any deferred target *before* asserting reset:
+
+```c
+	if (target->defer_examine)
+		target_reset_examined(target);
+```
+
+and `mips_m4k_assert_reset()` then refuses to drive SRST at all:
+
+```
+Warn : Reset is not asserted because the target is not examined.
+Warn : Use a reset button or power cycle the target.
+Debug: Command 'reset' failed with error code -4
+```
+
+Because the un-examine happens *inside* the same `arp_reset` call, no amount of manual `arp_examine` beforehand survives it - `reset halt` fails every time. This is why `-defer-examine` is applied per-profile by the launcher instead of unconditionally in [`mt7628.cfg`](../openocd/mt7628.cfg).
+
+### Invariants
+
+Constraints the ALL-register path depends on. Breaking any of them reintroduces the corruption it exists to avoid, so do not "simplify" them without hardware evidence.
+
+**IR selects must be their own adapter transaction.** Batching an IR select into the same `jtag_execute_queue()` as the following DR scan reproduces exactly the corruption the ALL register exists to avoid. `mt7628_pracc_force_all_ir()` flushes the select on its own and forces the transition through BYPASS rather than trusting OpenOCD's cached `tap->cur_instr`, which is not reliable here.
+
+**Every PRACC instruction needs an ALL=0 completion scan.** That second scan also supplies a NOP for the next sequential fetch, so a PRACC program runs NOP-interleaved and the PC advances by **8 bytes per supplied instruction**, not
+4. Every address check in the executor accounts for this.
+
+**Never touch CONTROL/ADDRESS/DATA individually while halted.** This is the entire reason the fork exists.
 
 ---
 
@@ -237,4 +384,5 @@ SPI NOR is at physical `0x1c000000`, accessible to the CPU at `0x9c000000` (KSEG
 | `tap: mt7628.cpu enabled (idcode 0x00000000)` | TDO open, target unpowered, or TAP held in reset |
 | `halt` times out | JTAG mode not strapped (TXD1 must be low), or EPHY LED pins not muxed to JTAG |
 | `targets` shows `running` after clean halt | GDB/IDE resume, external reset, or watchdog |
+| `mdw` prints nothing; `read_memory` says "target not halted" | `reset halt` cached a halted state without entering Debug Mode — see [§`reset halt` can report success without halting](#reset-halt-can-report-success-without-halting) |
 | PC stuck at `0x9c000000` after resume | CPU not progressing — check clock, SPI flash activity, and boot straps |

@@ -81,7 +81,7 @@
         {
             "label": "Serial Monitor",
             "type": "shell",
-            "command": "nix develop .#uboot --command picocom -b 115200 --flow n /dev/ttyUSB0",
+            "command": "nix develop .#uboot --command picocom -b 921600 --flow n /dev/ttyUSB0",
             "isBackground": true,
             "problemMatcher": [],
             "presentation": {
@@ -123,9 +123,10 @@
             }
         },
         {
-            "label": "JTAG: Flash NOR",
+            "label": "Flash: NOR (all partitions)",
+            "detail": "Erases and writes every partition. Requires --mac for the factory blob.",
             "type": "shell",
-            "command": "nix develop .#uboot --command python3 scripts/flash_nor_images.py --jtag --all --${input:board} --mac ${input:mac}",
+            "command": "nix develop .#uboot --command python3 scripts/flash_nor_images.py --${input:transport} --all --${input:board} --mac ${input:mac}",
             "dependsOn": "JTAG: Start OpenOCD J-Link",
             "presentation": {
                 "reveal": "always",
@@ -139,9 +140,27 @@
             }
         },
         {
-            "label": "JTAG: Flash U-Boot",
+            "label": "Flash: U-Boot + env",
+            "detail": "Writes u-boot-with-spl.bin and the U-Boot environment only.",
             "type": "shell",
-            "command": "nix develop .#uboot --command python3 scripts/flash_nor_images.py --jtag --u-boot --u-boot-env --${input:board} --mac ${input:mac}",
+            "command": "nix develop .#uboot --command python3 scripts/flash_nor_images.py --${input:transport} --u-boot --u-boot-env --${input:board} --mac ${input:mac}",
+            "dependsOn": "JTAG: Start OpenOCD J-Link",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": [],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "Flash: Erase NOR (full chip)",
+            "detail": "Erases the entire SPI NOR. Destructive - the board will not boot until reflashed.",
+            "type": "shell",
+            "command": "nix develop .#uboot --command python3 scripts/flash_nor_images.py --${input:transport} --${input:board} --full-erase",
             "dependsOn": "JTAG: Start OpenOCD J-Link",
             "presentation": {
                 "reveal": "always",
@@ -177,6 +196,22 @@
             "description": "Select board",
             "options": ["vocore2", "bodybytes"],
             "default": "vocore2"
+        },
+        {
+            "id": "transport",
+            "type": "pickString",
+            "description": "Flash transport",
+            "options": [
+                {
+                    "label": "jtag - stage into RAM over JTAG (needs OpenOCD + J-Link)",
+                    "value": "jtag"
+                },
+                {
+                    "label": "ymodem - stage over the serial console (needs only a U-Boot prompt)",
+                    "value": "ymodem"
+                }
+            ],
+            "default": "jtag"
         },
         {
             "id": "mac",

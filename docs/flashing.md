@@ -111,7 +111,7 @@ All scripted flashing uses the Python scripts in `scripts/`. Configuration (seri
 
 Follow [jtag.md](jtag.md) §1 to connect OpenOCD and halt the CPU. Then run `scripts/boot_uboot_jtag.py --bodybytes` — it verifies the chip ID, initialises PLL and DRAM, loads [`u-boot/u-boot.bin`](../u-boot/u-boot.bin) to RAM via JTAG, and waits for the U-Boot prompt.
 
-U-Boot should appear on **UART2 (TP19/TP20)** at **115200 8N1**: `picocom -b 115200 --flow n /dev/ttyUSB0`.
+U-Boot should appear on **UART2 (TP19/TP20)** at **921600 8N1**: `picocom -b 921600 --flow n /dev/ttyUSB0`.
 
 Do not continue until U-Boot runs correctly from RAM.
 
@@ -121,7 +121,17 @@ Do not continue until U-Boot runs correctly from RAM.
 
 With U-Boot at its prompt, first run `scripts/flash_nor_images.py --bodybytes --full-erase` to wipe the chip, then `--bodybytes --all --mac AA:BB:CC:DD:EE:FF` to write all partitions. (`--full-erase` and partition flags are mutually exclusive — two separate runs.) `--all` loads each binary via JTAG and writes to NOR at offsets from the U-Boot DTB; because it includes the factory partition, `--mac` is required (see §2c).
 
-**VS Code task:** _JTAG: Flash NOR_ runs `--all` with _JTAG: Start OpenOCD J-Link_ as a prerequisite. Run `--full-erase` manually first if needed.
+**VS Code tasks:** the three _Flash:_ tasks prompt for a **transport** — `jtag` or `ymodem` — and pass it straight through to the script:
+
+| Task | Runs |
+|---|---|
+| _Flash: NOR (all partitions)_ | `--all --mac ...` |
+| _Flash: U-Boot + env_ | `--u-boot --u-boot-env` |
+| _Flash: Erase NOR (full chip)_ | `--full-erase` |
+
+All three depend on _JTAG: Start OpenOCD J-Link_ for **both** transports. That is deliberate: the U-Boot shell YMODEM needs is itself established over JTAG by _JTAG: Boot U-Boot from RAM_, so OpenOCD is part of the flow either way. The transport only selects how the payload is staged once that shell exists — JTAG `load_image` versus U-Boot `loady`. `start_openocd_jlink.py` reuses an already-listening instance rather than failing on the port, so the prerequisite is a no-op when OpenOCD is already up.
+
+Erase and flash are separate tasks because `--full-erase` is mutually exclusive with the partition flags; run the erase task first for a first-time install.
 
 **CH341A alternative** (board powered off): see §3 — `scripts/flash_nor_images.py --bodybytes --file --mac ...` prints the exact `flashrom` command.
 
@@ -129,11 +139,39 @@ With U-Boot at its prompt, first run `scripts/flash_nor_images.py --bodybytes --
 
 To re-flash individual partitions without a full chip erase, pass partition flags: `--u-boot`, `--recovery`, or multiple together (e.g. `--u-boot-env --factory --mac AA:BB:CC:DD:EE:FF`). `--factory` requires an explicit `--mac` (see §2c). Each partition is erased to its DTS-defined size before writing. After flashing `--u-boot-env`, run `saveenv` at the U-Boot prompt on next boot to restore compiled-in defaults. Power-cycle to boot from updated NOR.
 
+### 4c-2 - Serial-only update over YMODEM (no JTAG)
+
+`--ymodem` stages the payload into DRAM with U-Boot's `loady` instead of a JTAG `load_image`, then writes NOR with the same `sf` commands and the same CRC verification. It needs **nothing but a U-Boot prompt on the serial port** — no OpenOCD, no J-Link. Ethernet is not wired on this board, so this is the only non-JTAG transport.
+
+```
+scripts/flash_nor_images.py --bodybytes --ymodem --recovery
+scripts/flash_nor_images.py --bodybytes --ymodem --all --mac AA:BB:CC:DD:EE:FF
+```
+
+The _Flash:_ VS Code tasks reach this by picking `ymodem` at the transport prompt (see [§4b](#4b---full-nor-programming-first-time--production)).
+
+The host rate comes from `[serial] baud` in [`config.ini`](../scripts/config.ini) and nowhere else — there is no `--baud` override, so there is exactly one place to change it and no way for the two to drift apart. The target must already be running at that rate.
+
+**Console baud is 921600**, set consistently in `CONFIG_BAUDRATE` ([`bodybytes_defconfig`](../u-boot/configs/bodybytes_defconfig)), the OpenWrt `bootargs`, [`config.ini`](../scripts/config.ini), and the `picocom` VS Code task. All four must agree — a mismatch shows up as a dead console, not as garbled output, because nothing ever reaches the `=>` prompt matcher.
+
+This matters here because YMODEM throughput is bounded by the line rate: at 921600 the wire ceiling is 92.2 KB/s, so the ~13 MiB recovery image takes roughly **2.5 minutes**.
+
+921600 is the highest rate the console runs at. `configs/mt7628.h` caps its `CFG_SYS_BAUDRATE_TABLE` there, so anything faster needs a board-level `#undef` and redefine in [`bodybytes.h`](../u-boot/include/configs/bodybytes.h) before `setenv baudrate` will accept it. There is no hardware flow control on TP19/TP20 and U-Boot's receive path is polled, so higher rates risk FIFO overrun mid-block.
+
+**If throughput is well below the line rate**, check the USB-serial latency timer before suspecting the target — the FTDI default of 16 ms costs more than the payload itself across ~13.4k blocks:
+
+```
+cat /sys/bus/usb-serial/devices/ttyUSB0/latency_timer   # 16 by default
+echo 1 | sudo tee /sys/bus/usb-serial/devices/ttyUSB0/latency_timer
+```
+
+YMODEM's per-block ACK is what paces the sender, since there is no flow control.
+
 ### 4d - Verify NOR boot
 
 Power-cycle the board (no JTAG required). The boot ROM reads NOR offset 0, executes the SPL, which initialises PLL and DRAM, decompresses U-Boot to `0x80200000`, and jumps there.
 
-U-Boot should appear on **UART2 (TP19/TP20)** at **115200 8N1**. Successful NOR boot confirms: SPL runs, DRAM init succeeds, NOR image layout is correct.
+U-Boot should appear on **UART2 (TP19/TP20)** at **921600 8N1**. Successful NOR boot confirms: SPL runs, DRAM init succeeds, NOR image layout is correct.
 
 ---
 
@@ -243,7 +281,7 @@ U-Boot reads GPIO#14 before any boot attempt:
 
 ### 6b - bootcmd
 
-The full boot logic is defined in [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env), compiled into `default_environment[]` and also written to NOR by [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) via `mkenvimage`. See [uboot.md - Boot sequence](uboot.md#boot-sequence) for the complete variable reference (`boot_selected`, `boot_auto`, `boot_mmc`, `boot_sf`, `fit_load_mmc`, `fit_load_sf`).
+The full boot logic is defined in [`u-boot/board/bodybytes/bodybytes/bodybytes.env`](../u-boot/board/bodybytes/bodybytes/bodybytes.env), compiled into `default_environment[]` and also written to NOR by [`scripts/flash_nor_images.py`](../scripts/flash_nor_images.py) via `mkenvimage`. See [uboot.md - Boot variables](uboot.md#boot-variables) for the complete variable reference (`boot_selected`, `boot_auto`, `boot_mmc`, `boot_sf`, `fit_load_mmc`, `fit_load_sf`).
 
 Key points relevant to flashing:
 - A blank or corrupt env partition falls back to the compiled-in defaults automatically.
@@ -287,7 +325,7 @@ This is the end-to-end flow for a manufacturer or end user starting from just th
    ./scripts/start_openocd_jlink.py --<board>
    ./scripts/boot_uboot_jtag.py --<board>
    ```
-   Wait for the `=>` prompt on the serial console (UART2, 115200 8N1) before continuing.
+   Wait for the `=>` prompt on the serial console (UART2, 921600 8N1) before continuing.
 4. Flash the composite image:
    ```sh
    ./scripts/flash_nor_images.py --<board> --jtag --image
@@ -298,6 +336,6 @@ This is the end-to-end flow for a manufacturer or end user starting from just th
    ssh root@bodybytes.local
    bodybytes-provision set-mac random
    ```
-7. Install the main OS onto eMMC: continue from [§5b](#5b--first-install-from-nor-recovery), uploading `openwrt-sysupgrade.bin` as the sysupgrade image via LuCI.
+7. Install the main OS onto eMMC: continue from [§5b](#5b---first-install-from-nor-recovery), uploading `openwrt-sysupgrade.bin` as the sysupgrade image via LuCI.
 
 `flash_nor_images.py --file` always writes to the single path in `config.ini`'s `nor_image` (default `build/bodybytes_nor_image.bin`) regardless of `--board`; `collect_binaries.sh` renames each run's output before starting the next so the vocore2 pass doesn't clobber the bodybytes one, and leaves `nor_image` itself untouched — you point it at whichever collected file you actually want to flash.

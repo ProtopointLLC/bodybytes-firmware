@@ -8,7 +8,7 @@ import serial
 class UBoot:
     PROMPT = b"=> "
 
-    def __init__(self, port: str, baud: int = 115200):
+    def __init__(self, port: str, baud: int):
         self._ser = serial.Serial(port, baud, timeout=0.1)
         time.sleep(0.2)
         self._ser.reset_input_buffer()
@@ -40,6 +40,41 @@ class UBoot:
             on_line: Callable[[str], None] | None = None) -> str:
         self._ser.write(command.encode() + b"\n")
         return self._read_until_prompt(timeout=timeout, on_line=on_line)
+
+    def loady(self, addr: int, data: bytes, name: str = "image.bin",
+              progress: Callable[[int, int], None] | None = None,
+              timeout: float = 30.0) -> str:
+        """
+        Load `data` into DRAM at `addr` over YMODEM, using U-Boot's `loady`.
+
+        Needs nothing but a live => prompt - no JTAG. Returns the command
+        output after the transfer, which carries the "## Total Size" line.
+        """
+        from . import ymodem
+
+        self._ser.reset_input_buffer()
+        self._ser.write(f"loady {addr:#x}\n".encode())
+
+        # Wait for the receiver to start offering 'C'. Reading it here would
+        # steal it from the sender, so only look for the banner and let
+        # ymodem.send() consume the 'C' itself.
+        deadline = time.monotonic() + timeout
+        buf = b""
+        while time.monotonic() < deadline:
+            chunk = self._ser.read(self._ser.in_waiting or 1)
+            if chunk:
+                buf += chunk
+                if b"Ready for binary" in buf:
+                    break
+        else:
+            raise TimeoutError(
+                f"U-Boot: no loady banner after {timeout:.0f}s "
+                f"(is CONFIG_CMD_LOADB enabled?)")
+
+        ymodem.send(self._ser, data, name=name, progress=progress)
+
+        # loady prints "## Total Size = ..." and returns to the prompt.
+        return self._read_until_prompt(timeout=timeout)
 
     def _read_until_prompt(self, timeout: float,
                            on_line: Callable[[str], None] | None = None) -> str:

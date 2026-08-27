@@ -51,7 +51,7 @@ make -j$(nproc)
 
 Both tasks run inside `nix develop .#uboot` automatically — no manual shell entry required.
 
-→ See [flashing.md §4](flashing.md#4--program-spi-nor) for NOR programming.
+→ See [flashing.md §4](flashing.md#4---program-spi-nor) for NOR programming.
 
 ---
 
@@ -129,4 +129,4 @@ openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes_recovery-initramfs-kernel.bin
 
 All three tasks enter `nix develop .#openwrt` automatically - no manual shell entry required.
 
-→ See [flashing.md §3](flashing.md#3--assemble-nor-image) to assemble the NOR image and [flashing.md §4](flashing.md#4--program-spi-nor) to program NOR. See [flashing.md §5](flashing.md#5--emmc) for initial eMMC install.
+→ See [flashing.md §3](flashing.md#3---assemble-full-nor-image-ch341a-only) to assemble the NOR image and [flashing.md §4](flashing.md#4---program-spi-nor) to program NOR. See [flashing.md §5](flashing.md#5---emmc) for initial eMMC install.

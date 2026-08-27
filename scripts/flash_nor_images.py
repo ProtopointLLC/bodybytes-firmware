@@ -3,6 +3,11 @@
 Flash NOR partitions to bodybytes.
 
 --jtag (default): load via JTAG into RAM, write via U-Boot sf commands.
+--ymodem: stage over YMODEM into RAM using a running U-Boot shell, then
+  write with the same sf commands. Needs no JTAG at all - serial only.
+  Ethernet is not available on this board, so this is the only non-JTAG
+  transport. Console must already be at the rate in config.ini ([serial]
+  baud), which is the single place that rate is configured.
 --file: assemble a NOR image to build/ instead (implies --all).
   --minimal trims it after the last partition's actual data, for use with
   --jtag --image instead of flashrom (not flashrom-writable otherwise).
@@ -12,12 +17,15 @@ default. (On-device: bodybytes-provision set-mac random.)
 
 Prerequisites (JTAG): U-Boot at the => prompt (boot_uboot_jtag.py) and a
 compiled u-boot-with-spl.bin. Connection settings read from config.ini.
+Prerequisites (YMODEM): U-Boot at the => prompt, reachable on the serial
+port. Nothing else - no OpenOCD, no J-Link.
 
 Usage:
   flash_nor_images.py --bodybytes --full-erase
   flash_nor_images.py --bodybytes --all --mac XX:XX:XX:XX:XX:XX
   flash_nor_images.py --bodybytes --file --minimal --mac XX:XX:XX:XX:XX:XX
   flash_nor_images.py --bodybytes --jtag --image
+  flash_nor_images.py --bodybytes --ymodem --recovery
 """
 
 import argparse
@@ -25,6 +33,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 import zlib
 from pathlib import Path
 
@@ -32,6 +41,7 @@ import serial
 
 from lib.openocd import OpenOCD
 from lib.uboot import UBoot
+from lib.ymodem import YmodemError
 from lib.log import log, err, oc as _oc, ub as _ub
 from lib.config import (
     OPENOCD_HOST, OPENOCD_PORT,
@@ -118,13 +128,11 @@ def _prepare_blobs(selected: list[str], mac: bytes, board: BoardConfig) -> dict[
     return blobs
 
 
-# --- JTAG strategy ---
+# --- on-target strategies: stage into DRAM, then program NOR ---
 
-def _flash_jtag(openocd: OpenOCD, uboot: UBoot,
-                label: str, data: bytes, flash_offset: int) -> None:
+def _stage_jtag(openocd: OpenOCD, label: str, data: bytes) -> None:
+    """Load `data` into DRAM at STAGING_ADDR over JTAG."""
     total = len(data)
-    log(f"Flashing '{label}': {total:#x} bytes at NOR offset {flash_offset:#x}")
-
     load_timeout = max(60, total // (70 * 1024) * 3)
     _oc(openocd, "halt", timeout=10)
 
@@ -140,6 +148,54 @@ def _flash_jtag(openocd: OpenOCD, uboot: UBoot,
         err(f"load_image failed:\n{out}")
     _oc(openocd, "resume", timeout=10)
 
+
+def _stage_ymodem(uboot: UBoot, label: str, data: bytes) -> None:
+    """
+    Load `data` into DRAM at STAGING_ADDR over YMODEM. No JTAG involved.
+
+    At 921600 the wire ceiling is 92.2 KB/s; YMODEM-1K adds ~0.6% framing
+    plus one round trip per 1 KiB block, so expect roughly 90 KB/s if the
+    USB-serial latency timer is low. If throughput is far below that, check
+    /sys/bus/usb-serial/devices/<port>/latency_timer - the FTDI default of
+    16 ms costs more than the payload itself.
+    """
+    total = len(data)
+    started = time.monotonic()
+    last = [0.0]
+
+    def progress(sent: int, size: int) -> None:
+        now = time.monotonic()
+        if now - last[0] < 1.0 and sent != size:
+            return
+        last[0] = now
+        rate = sent / max(now - started, 1e-3)
+        eta = (size - sent) / rate if rate > 0 else 0
+        log(f"  {label}: {sent // 1024}/{size // 1024} KiB "
+            f"({100 * sent // size}%)  {rate / 1024:.0f} KiB/s  ETA {eta:.0f}s")
+
+    log(f"Sending '{label}' over YMODEM to {STAGING_ADDR:#x} "
+        f"({total / (1024 * 1024):.1f} MiB)")
+    try:
+        out = uboot.loady(STAGING_ADDR, data, name=f"{label}.bin", progress=progress)
+    except (TimeoutError, YmodemError) as e:
+        err(f"YMODEM transfer of '{label}' failed: {e}")
+
+    elapsed = time.monotonic() - started
+    log(f"YMODEM complete: {total / 1024:.0f} KiB in {elapsed:.0f}s "
+        f"({total / max(elapsed, 1e-3) / 1024:.0f} KiB/s)")
+
+    m = re.search(r"Total Size\s*=\s*(0x[0-9a-fA-F]+)", out)
+    if not m:
+        err(f"loady did not report a total size:\n{out}")
+    got = int(m.group(1), 16)
+    if got != total:
+        err(f"loady received {got:#x} bytes, expected {total:#x}")
+
+
+def _program_nor(uboot: UBoot, label: str, data: bytes, flash_offset: int) -> None:
+    """Verify the DRAM staging copy, then write and read back NOR."""
+    total = len(data)
+
     sectors = (total + NOR_SECTOR_SIZE - 1) // NOR_SECTOR_SIZE
     pages   = (total + 255) // 256
     update_timeout = max(300, sectors * 200 // 1000 + pages * 5 // 1000 + 60)
@@ -153,7 +209,7 @@ def _flash_jtag(openocd: OpenOCD, uboot: UBoot,
         err(f"crc32 (staging) output unparseable:\n{out}")
     if staging_crc != expected_crc:
         err(f"DRAM staging CRC mismatch: got {staging_crc:#010x}, expected {expected_crc:#010x}"
-            f" - load_image corrupted data")
+            f" - the transfer into DRAM corrupted data")
     log(f"DRAM staging CRC verified: {staging_crc:#010x}")
 
     out = _ub(uboot, "sf probe", timeout=10)
@@ -177,6 +233,27 @@ def _flash_jtag(openocd: OpenOCD, uboot: UBoot,
     if actual_crc != expected_crc:
         err(f"CRC32 mismatch for '{label}': NOR={actual_crc:#010x}  disk={expected_crc:#010x}")
     log(f"CRC32 verified: {actual_crc:#010x}")
+
+
+def _flash_jtag(openocd: OpenOCD, uboot: UBoot,
+                label: str, data: bytes, flash_offset: int) -> None:
+    log(f"Flashing '{label}': {len(data):#x} bytes at NOR offset {flash_offset:#x}")
+    _stage_jtag(openocd, label, data)
+    _program_nor(uboot, label, data, flash_offset)
+
+
+def _flash_ymodem(uboot: UBoot, label: str, data: bytes, flash_offset: int) -> None:
+    log(f"Flashing '{label}': {len(data):#x} bytes at NOR offset {flash_offset:#x}")
+    _stage_ymodem(uboot, label, data)
+    _program_nor(uboot, label, data, flash_offset)
+
+
+def _flash(openocd, uboot: UBoot, strategy: str,
+           label: str, data: bytes, flash_offset: int) -> None:
+    if strategy == "ymodem":
+        _flash_ymodem(uboot, label, data, flash_offset)
+    else:
+        _flash_jtag(openocd, uboot, label, data, flash_offset)
 
 
 def _probe_nor(uboot: UBoot, board: BoardConfig) -> None:
@@ -236,6 +313,8 @@ def main():
 
     p.add_argument("--jtag", dest="strategy", action="store_const", const="jtag",
                    help="use JTAG + U-Boot sf (default)")
+    p.add_argument("--ymodem", dest="strategy", action="store_const", const="ymodem",
+                   help="stage over YMODEM via a running U-Boot shell (no JTAG at all)")
     p.add_argument("--file", dest="strategy", action="store_const", const="file",
                    help=f"assemble NOR image to {NOR_IMAGE} (implies --all)")
     p.set_defaults(strategy="jtag")
@@ -262,11 +341,11 @@ def main():
     if args.full_erase and partition_flags:
         p.error("--full-erase is mutually exclusive with partition selection flags")
     if args.full_erase and args.strategy == "file":
-        p.error("--full-erase requires JTAG, not --file")
+        p.error("--full-erase requires --jtag or --ymodem, not --file")
     if args.minimal and args.strategy != "file":
         p.error("--minimal requires --file")
     if args.image and args.strategy == "file":
-        p.error("--image requires --jtag, not --file")
+        p.error("--image requires --jtag or --ymodem, not --file")
     if args.image and (partition_flags or args.full_erase):
         p.error("--image is mutually exclusive with --full-erase and partition selection flags")
     if args.image and not NOR_IMAGE.exists():
@@ -307,31 +386,38 @@ def main():
         log("Done")
         return
 
-    # JTAG strategy
-    log(f"Connecting to OpenOCD {OPENOCD_HOST}:{OPENOCD_PORT}")
-    try:
-        openocd = OpenOCD(OPENOCD_HOST, OPENOCD_PORT)
-    except (ConnectionRefusedError, OSError) as e:
-        err(f"Cannot connect to OpenOCD: {e}")
-    log("OpenOCD connected")
+    # on-target strategies: --jtag stages over JTAG, --ymodem over serial only
+    openocd = None
+    if args.strategy == "jtag":
+        log(f"Connecting to OpenOCD {OPENOCD_HOST}:{OPENOCD_PORT}")
+        try:
+            openocd = OpenOCD(OPENOCD_HOST, OPENOCD_PORT)
+        except (ConnectionRefusedError, OSError) as e:
+            err(f"Cannot connect to OpenOCD: {e}")
+        log("OpenOCD connected")
 
     log(f"Opening serial {SERIAL_PORT} @ {SERIAL_BAUD} baud")
     try:
         uboot = UBoot(SERIAL_PORT, SERIAL_BAUD)
     except serial.SerialException as e:
-        openocd.close()
+        if openocd:
+            openocd.close()
         err(f"Cannot open serial port: {e}")
 
     try:
         prompt_found = uboot.sync(timeout=5)
     except serial.SerialException as e:
-        openocd.close()
+        if openocd:
+            openocd.close()
         uboot.close()
         err(f"Serial error waiting for U-Boot prompt: {e}")
     if not prompt_found:
-        openocd.close()
+        if openocd:
+            openocd.close()
         uboot.close()
-        err("No U-Boot prompt on serial port - is U-Boot running at the => prompt?")
+        err(f"No U-Boot prompt on serial port at {SERIAL_BAUD} baud - "
+            f"is U-Boot running at the => prompt, and is its baud rate "
+            f"{SERIAL_BAUD}? (set [serial] baud in config.ini)")
     log("U-Boot prompt confirmed")
 
     try:
@@ -344,26 +430,23 @@ def main():
             if "OK" not in out:
                 err("sf erase failed")
         elif args.image:
-            _flash_jtag(
-                openocd, uboot,
-                label=NOR_IMAGE.name,
-                data=NOR_IMAGE.read_bytes(),
-                flash_offset=0,
-            )
+            _flash(openocd, uboot, args.strategy,
+                   label=NOR_IMAGE.name,
+                   data=NOR_IMAGE.read_bytes(),
+                   flash_offset=0)
         else:
             for name in selected:
                 data = partitions[name]["data"]
                 part_size = partitions[name]["size"]
                 if len(data) > part_size:
                     err(f"'{name}' binary ({len(data):#x} B) exceeds partition ({part_size:#x} B)")
-                _flash_jtag(
-                    openocd, uboot,
-                    label=name,
-                    data=data,
-                    flash_offset=partitions[name]["offset"],
-                )
+                _flash(openocd, uboot, args.strategy,
+                       label=name,
+                       data=data,
+                       flash_offset=partitions[name]["offset"])
     finally:
-        openocd.close()
+        if openocd:
+            openocd.close()
         uboot.close()
 
     log("Done")

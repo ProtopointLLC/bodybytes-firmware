@@ -57,7 +57,7 @@ The [VoCore2](https://vocore.io/v2.html) module uses the same MT7628AN SoC and c
 ## Documentation
 
 - [docs/building.md](docs/building.md) - build U-Boot and OpenWrt from source
-- [docs/jtag.md](docs/jtag.md) - JTAG wiring, connectivity check, PLL/DRAM bootstrap
+- [docs/jtag.md](docs/jtag.md) - JTAG wiring, connectivity check, PLL/DRAM bootstrap, and the MT7628AN EJTAG workaround (SRST vs TRST-only behaviour)
 - [docs/uboot.md](docs/uboot.md) - U-Boot board files, NOR image, and env layout
 - [docs/flashing.md](docs/flashing.md) - full first-install and sysupgrade procedures
 - [docs/openwrt.md](docs/openwrt.md) - OpenWrt board files, DTS, and package reference (includes Travelmate WiFi uplink / hybrid AP+STA relay)

@@ -38,6 +38,7 @@ def _mdw(openocd: OpenOCD, addr: int) -> int:
 
 
 def jtag_ram_boot(openocd: OpenOCD, dram_size_mb: int) -> None:
+    _oc(openocd, "poll", timeout=10)
     _oc(openocd, "halt", timeout=10)
 
     out = _oc(openocd, "reg pc", timeout=5)

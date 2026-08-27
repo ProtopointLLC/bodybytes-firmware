@@ -13,6 +13,19 @@
           pkgs = import nixpkgs { inherit system; };
           crossPkgs = pkgs.pkgsCross.mipsel-linux-gnu;
 
+          patchedOpenocd = pkgs.openocd.overrideAttrs (old: {
+            src = pkgs.fetchFromGitHub {
+              owner = "ProtopointLLC";
+              repo = "bobybytes-openocd";
+              rev = "8e04bc7b27087dcca7f3858534ed665bb1b9e92d";
+              hash = "sha256-XemQSScTfyQJ1yl2unMCjgkYoiBlo3t8Jrv3dBhz2Uo=";
+              fetchSubmodules = true;
+            };
+
+            nativeBuildInputs = (old.nativeBuildInputs or [ ])
+              ++ [ pkgs.autoreconfHook ];
+          });
+
           openwrtFHSEnv = pkgs.buildFHSEnv {
             name = "openwrt";
 
@@ -54,10 +67,12 @@
               '';
 
               buildInputs = with pkgs; [
-                picocom openocd flashrom
+                picocom flashrom
+                patchedOpenocd
                 inetutils
                 crossPkgs.buildPackages.gcc
                 crossPkgs.buildPackages.binutils
+                crossPkgs.buildPackages.gdb
                 gnumake bison flex bc dtc swig pkg-config
                 openssl openssl.dev gnutls gnutls.dev
                 ncurses ncurses.dev
@@ -73,8 +88,8 @@
           };
 
           packages = {
-            # OpenWrt FHS env wrapper — use with: nix run .#openwrt -- bash -c '...'
             openwrt = openwrtFHSEnv;
+            openocd = patchedOpenocd;
           };
         };
 
