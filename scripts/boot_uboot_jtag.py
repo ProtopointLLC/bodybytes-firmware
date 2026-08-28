@@ -29,6 +29,11 @@ from lib.config import (
 )
 
 
+# A wedged target goes silent; a slow one keeps reporting. See docs/jtag.md.
+LOAD_IDLE_SECONDS = 900
+LOAD_MAX_SECONDS = 6 * 3600
+
+
 def _mdw(openocd: OpenOCD, addr: int) -> int:
     out = _oc(openocd, f"mdw {addr:#x}", timeout=5)
     try:
@@ -76,14 +81,15 @@ def jtag_ram_boot(openocd: OpenOCD, dram_size_mb: int) -> None:
 
     if not UBOOT_RAM_BIN.exists():
         err(f"not found: {UBOOT_RAM_BIN} (build U-Boot first)")
+    # Minutes natively, up to an hour over VM USB; bound silence, not duration.
     out = _oc(openocd, f"load_image {UBOOT_RAM_BIN} {UBOOT_RAM_ADDR:#x} bin",
-              timeout=900)
+              timeout=LOAD_MAX_SECONDS, idle_timeout=LOAD_IDLE_SECONDS)
     if "bytes written" not in out:
         err(f"load_image failed:\n{out}")
 
     size = UBOOT_RAM_BIN.stat().st_size
     out = _oc(openocd, f"verify_image_checksum {UBOOT_RAM_BIN} {UBOOT_RAM_ADDR:#x} bin",
-              timeout=120)
+              timeout=LOAD_MAX_SECONDS, idle_timeout=LOAD_IDLE_SECONDS)
     if f"verified {size} bytes" not in out:
         err(f"CRC32 mismatch: {UBOOT_RAM_BIN.name} did not land at "
             f"{UBOOT_RAM_ADDR:#010x}\n{out}")

@@ -128,19 +128,24 @@ def _prepare_blobs(selected: list[str], mac: bytes, board: BoardConfig) -> dict[
     return blobs
 
 
+# A wedged target goes silent; a slow one keeps reporting. See docs/jtag.md.
+LOAD_IDLE_SECONDS = 900
+LOAD_MAX_SECONDS = 6 * 3600
+
+
 # --- on-target strategies: stage into DRAM, then program NOR ---
 
 def _stage_jtag(openocd: OpenOCD, label: str, data: bytes) -> None:
     """Load `data` into DRAM at STAGING_ADDR over JTAG."""
-    total = len(data)
-    load_timeout = max(60, total // 2000 * 2)
     _oc(openocd, "halt", timeout=10)
 
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=f"_{label}.bin")
     try:
         os.write(tmp_fd, data)
         os.close(tmp_fd)
-        out = _oc(openocd, f"load_image {tmp_path} {STAGING_ADDR:#x} bin", timeout=load_timeout)
+        # Rate varies ~20x between native USB and a VM; bound silence, not time.
+        out = _oc(openocd, f"load_image {tmp_path} {STAGING_ADDR:#x} bin",
+                  timeout=LOAD_MAX_SECONDS, idle_timeout=LOAD_IDLE_SECONDS)
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 

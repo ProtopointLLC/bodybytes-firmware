@@ -52,7 +52,11 @@ There is one switch, not several. `off` is exactly stock OpenOCD, correct on thi
 [Info] ejtag_all_quirk: on (no SRST - ALL register, FASTDATA off)
 ```
 
-Bulk writes run at ~2.3 KiB/s, so the 484 KB U-Boot takes ~3.5 minutes. `Fastdata access Failed` followed by `Falling back to non-bulk write` is **expected** on this path and is not a fault: OpenOCD tries FASTDATA, the quirk refuses it, and PRACC writes do the work. Every load is CRC32-checked afterwards - see [§Verify every bulk write](#verify-every-bulk-write).
+Bulk writes run at ~2.3 KiB/s with the adapter on a native USB port, so the 484 KB U-Boot takes ~3.5 minutes. `Fastdata access Failed` followed by `Falling back to non-bulk write` is **expected** on this path and is not a fault: OpenOCD tries FASTDATA, the quirk refuses it, and PRACC writes do the work. Every load is CRC32-checked afterwards - see [§Verify every bulk write](#verify-every-bulk-write).
+
+PRACC writes are latency-bound, not bandwidth-bound: about eight USB round trips per 32-bit word, with only a few bytes in each. Throughput therefore tracks USB round-trip latency rather than link speed, and a virtualised USB stack costs a lot. Measured with the same J-Link and board: **~2.3 KiB/s** on a native port, **~0.9 KiB/s** through VirtualBox with an xHCI controller, and **~0.12 KiB/s** through VirtualBox with OHCI - 3.5 minutes, 9 minutes and over an hour for the same 484 KB. If you run this in a VM, give it an xHCI (USB 3.0) controller: the J-Link is a full-speed device, and an EHCI controller hands full-speed devices to its companion OHCI, so enabling USB 2.0 alone does not help.
+
+Because that range is so wide, the scripts bound **silence rather than duration**: OpenOCD reports progress every ~2 s, so `load_image` may take an hour without being a timeout, while a target that stops reporting fails after `LOAD_IDLE_SECONDS`. Do not replace this with a fixed timeout computed from a throughput guess - no single figure is right across native and virtualised USB.
 
 For multi-megabyte payloads use [`flash_nor_images.py --ymodem`](flashing.md#4c-2---serial-only-update-over-ymodem-no-jtag). On the TRST-only path JTAG is the slow option: at ~2.3 KiB/s the ~13 MB OpenWrt recovery image would take over an hour, so JTAG is for getting U-Boot into DRAM, and YMODEM carries anything large after that.
 

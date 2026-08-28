@@ -32,14 +32,16 @@ def _lines(out: str, cmd: str):
         if clean and clean != cmd:
             yield clean
 
-def oc(openocd: OpenOCD, cmd: str, timeout: float = 300) -> str:
+def oc(openocd: OpenOCD, cmd: str, timeout: float = 300,
+       idle_timeout: float | None = None) -> str:
     print(f"{ts()} [OpenOCD] > {cmd}", flush=True)
     def on_line(line: str) -> None:
         clean = _printable(line)
         if clean and clean != cmd:
             print(f"{ts()} [OpenOCD] < {clean}", flush=True)
     try:
-        return openocd.cmd(cmd, timeout=timeout, on_line=on_line)
+        return openocd.cmd(cmd, timeout=timeout, on_line=on_line,
+                           idle_timeout=idle_timeout)
     except (TimeoutError, ConnectionError, OSError) as e:
         err(f"OpenOCD: {e}")
 
