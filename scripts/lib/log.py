@@ -33,14 +33,15 @@ def _lines(out: str, cmd: str):
             yield clean
 
 def oc(openocd: OpenOCD, cmd: str, timeout: float = 300) -> str:
-    print(f"{ts()} [OpenOCD] > {cmd}")
+    print(f"{ts()} [OpenOCD] > {cmd}", flush=True)
+    def on_line(line: str) -> None:
+        clean = _printable(line)
+        if clean and clean != cmd:
+            print(f"{ts()} [OpenOCD] < {clean}", flush=True)
     try:
-        out = openocd.cmd(cmd, timeout=timeout)
+        return openocd.cmd(cmd, timeout=timeout, on_line=on_line)
     except (TimeoutError, ConnectionError, OSError) as e:
         err(f"OpenOCD: {e}")
-    for line in _lines(out, cmd):
-        print(f"{ts()} [OpenOCD] < {line}")
-    return out
 
 def ub(uboot: UBoot, cmd: str, timeout: float = SERIAL_TIMEOUT) -> str:
     print(f"{ts()} [U-Boot] > {cmd}", flush=True)

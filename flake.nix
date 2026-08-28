@@ -17,8 +17,8 @@
             src = pkgs.fetchFromGitHub {
               owner = "ProtopointLLC";
               repo = "bobybytes-openocd";
-              rev = "4385ec3db584dd7b4f242358d40d22f836d931b0";
-              hash = "sha256-DyTx1O/OU9XUTaNGZJrTAtm5+VmKLzWczHjEYRozVJw=";
+              rev = "d9e578acecd2842189117e50c56ef8edc32584da";
+              hash = "sha256-J6MHyzfVdt4h/s6TJ+uZUhY5/I0A2SelYcQugjd3upc=";
               fetchSubmodules = true;
             };
 
