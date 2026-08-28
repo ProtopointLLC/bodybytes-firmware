@@ -125,7 +125,7 @@
         {
             "label": "Flash: NOR (all partitions)",
             "type": "shell",
-            "command": "nix develop .#uboot --command python3 scripts/flash_nor_images.py --${input:transport} --all --${input:board} --mac ${input:mac}",
+            "command": "pkill picocom || true; nix develop .#uboot --command python3 scripts/flash_nor_images.py --${input:transport} --all --${input:board} --mac ${input:mac}",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",
@@ -140,7 +140,7 @@
         {
             "label": "Flash: U-Boot + env",
             "type": "shell",
-            "command": "nix develop .#uboot --command python3 scripts/flash_nor_images.py --${input:transport} --u-boot --u-boot-env --${input:board} --mac ${input:mac}",
+            "command": "pkill picocom || true; nix develop .#uboot --command python3 scripts/flash_nor_images.py --${input:transport} --u-boot --u-boot-env --${input:board} --mac ${input:mac}",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",
@@ -155,7 +155,7 @@
         {
             "label": "Flash: Erase NOR (full chip)",
             "type": "shell",
-            "command": "nix develop .#uboot --command python3 scripts/flash_nor_images.py --${input:transport} --${input:board} --full-erase",
+            "command": "pkill picocom || true; nix develop .#uboot --command python3 scripts/flash_nor_images.py --${input:transport} --${input:board} --full-erase",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",
@@ -170,7 +170,7 @@
         {
             "label": "JTAG: Boot U-Boot from RAM",
             "type": "shell",
-            "command": "nix develop .#uboot --command python3 scripts/boot_uboot_jtag.py --${input:board}",
+            "command": "pkill picocom || true; nix develop .#uboot --command python3 scripts/boot_uboot_jtag.py --${input:board}",
             "dependsOn": "JTAG: Start OpenOCD J-Link",
             "presentation": {
                 "reveal": "always",

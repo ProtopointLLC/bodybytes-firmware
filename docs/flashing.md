@@ -117,6 +117,8 @@ Do not continue until U-Boot runs correctly from RAM.
 
 **VS Code tasks:** _JTAG: Boot U-Boot from RAM_ runs [`boot_uboot_jtag.py`](../scripts/boot_uboot_jtag.py) with _JTAG: Start OpenOCD J-Link_ as a prerequisite. _Serial Monitor_ opens `picocom` on `/dev/ttyUSB0`.
 
+**The scripts need `/dev/ttyUSB0` to themselves.** `boot_uboot_jtag.py` and `flash_nor_images.py` drive the U-Boot prompt over that port, and a `picocom` attached to it will eat the replies they are waiting for - which surfaces as an autoboot-interrupt or prompt timeout, not as an obvious port conflict. The tasks that run those two scripts therefore begin with `pkill picocom || true`, so starting one closes an open _Serial Monitor_. Re-open it afterwards to watch the console.
+
 ### 4b - Full NOR programming (first-time / production)
 
 With U-Boot at its prompt, first run `scripts/flash_nor_images.py --bodybytes --full-erase` to wipe the chip, then `--bodybytes --all --mac AA:BB:CC:DD:EE:FF` to write all partitions. (`--full-erase` and partition flags are mutually exclusive — two separate runs.) `--all` loads each binary via JTAG and writes to NOR at offsets from the U-Boot DTB; because it includes the factory partition, `--mac` is required (see §2c).
