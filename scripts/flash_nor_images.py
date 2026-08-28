@@ -133,7 +133,7 @@ def _prepare_blobs(selected: list[str], mac: bytes, board: BoardConfig) -> dict[
 def _stage_jtag(openocd: OpenOCD, label: str, data: bytes) -> None:
     """Load `data` into DRAM at STAGING_ADDR over JTAG."""
     total = len(data)
-    load_timeout = max(60, total // (70 * 1024) * 3)
+    load_timeout = max(60, total // 2000 * 2)
     _oc(openocd, "halt", timeout=10)
 
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=f"_{label}.bin")

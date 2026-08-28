@@ -57,9 +57,13 @@ def jtag_ram_boot(openocd: OpenOCD, dram_size_mb: int) -> None:
     log(f"chip ID = {chip_id:#010x} (MT7628 ok)")
 
     _oc(openocd, "cpu_pll_init", timeout=10)
+    # The PLL is up, so the adapter can run 10x faster.
     _oc(openocd, "adapter speed 1000", timeout=5)
+    # A speed change resets the TAP; re-select to resync OpenOCD's IR cache.
+    _oc(openocd, "irscan mt7628.cpu 0x1f", timeout=5)
 
     _oc(openocd, f"dram_init {dram_size_mb}", timeout=60)
+    # Work area for the CRC32 check below; must be after dram_init. See docs/jtag.md.
     _oc(openocd,
         "mt7628.cpu0 configure -work-area-phys 0xa0001000 -work-area-size 4096 -work-area-backup 0",
         timeout=5)
@@ -72,9 +76,18 @@ def jtag_ram_boot(openocd: OpenOCD, dram_size_mb: int) -> None:
 
     if not UBOOT_RAM_BIN.exists():
         err(f"not found: {UBOOT_RAM_BIN} (build U-Boot first)")
-    out = _oc(openocd, f"load_image {UBOOT_RAM_BIN} {UBOOT_RAM_ADDR:#x} bin")
+    out = _oc(openocd, f"load_image {UBOOT_RAM_BIN} {UBOOT_RAM_ADDR:#x} bin",
+              timeout=900)
     if "bytes written" not in out:
         err(f"load_image failed:\n{out}")
+
+    size = UBOOT_RAM_BIN.stat().st_size
+    out = _oc(openocd, f"verify_image_checksum {UBOOT_RAM_BIN} {UBOOT_RAM_ADDR:#x} bin",
+              timeout=120)
+    if f"verified {size} bytes" not in out:
+        err(f"CRC32 mismatch: {UBOOT_RAM_BIN.name} did not land at "
+            f"{UBOOT_RAM_ADDR:#010x}\n{out}")
+    log(f"CRC32 verified: {size} bytes at {UBOOT_RAM_ADDR:#010x}")
 
     _oc(openocd, f"reg pc {UBOOT_RAM_ADDR:#x}", timeout=5)
     _oc(openocd, "resume", timeout=5)

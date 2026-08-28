@@ -10,17 +10,12 @@ Board profiles (hardware_reset) are read from scripts/config.ini.
 Usage:
   start_openocd_jlink.py --bodybytes
   start_openocd_jlink.py --vocore2
-  start_openocd_jlink.py --vocore2 --no-halt
 
 If OpenOCD is already listening it is reused rather than started a second
 time, so running this twice - or running it as a task prerequisite when it is
 already up - is harmless.
 
---no-halt skips the halt/wait_halt commands entirely, so OpenOCD stays up
-and reaches its normal telnet/tcl/gdb server listen state regardless of
-whether a halt would succeed. Use this to attach over telnet (port 4444)
-and experiment manually, e.g. with `mips_m4k scan_delay` and `cp0` reads,
-without the process dying out from under you on a failed/timed-out halt.
+The core is always left cleanly halted; OpenOCD exits non-zero if it is not.
 """
 
 import argparse
@@ -48,12 +43,9 @@ def main() -> None:
     for name in BOARD_NAMES:
         group.add_argument(f"--{name}", dest="board", action="store_const", const=name,
                            help=f"use {name} board profile")
-    parser.add_argument("--no-halt", action="store_true",
-                        help="skip the halt/wait_halt commands; stay attached for manual telnet testing")
     args = parser.parse_args()
 
-    # Reports "ready" so a VS Code background task waiting on that pattern
-    # completes instead of hanging.
+    # Reports "ready" so a waiting VS Code background task completes.
     if _port_open(OPENOCD_HOST, OPENOCD_PORT):
         log(f"OpenOCD already listening on {OPENOCD_HOST}:{OPENOCD_PORT} - "
             f"reusing it, not starting a second one; ready")
@@ -74,10 +66,12 @@ def main() -> None:
     log(f"Board          : {board.name}")
     log(f"hardware_reset : {board.hardware_reset}")
     log(f"reset_config   : {reset_config}")
-    log(f"ejtag_all_quirk: {'off (SRST wired - stock EJTAG + FASTDATA)' if board.hardware_reset else 'on (no SRST - ALL register, FASTDATA disabled)'}")
+    log(f"ejtag_all_quirk: {'off (SRST wired - stock EJTAG)' if board.hardware_reset else 'on (no SRST - ALL register, FASTDATA off)'}")
+    if not board.hardware_reset:
+        log("ejtag_reset    : EJTAGBOOT + RSTCTL.SYS_RST")
     log(f"openocd        : {openocd}")
 
-    argv = [
+    common = [
         openocd,
         "-f", "interface/jlink.cfg",
         "-c", "transport select jtag",
@@ -86,19 +80,10 @@ def main() -> None:
         "-f", "mt7628.cfg",
     ]
 
-    if board.hardware_reset:
-        argv += [
-            "-c", "init",
-        ]
-        if not args.no_halt:
-            argv += [
-                "-c", "reset halt",
-                "-c", "poll",
-                "-c", "halt",
-                "-c", "wait_halt 5000",
-            ]
-    else:
-        argv += [
+    if not board.hardware_reset:
+        # Pass 1: reset over EJTAG, then exit - pass 2 needs a fresh process.
+        log("EJTAG reset    : pass 1/2 - resetting SoC")
+        reset_argv = common + [
             "-c", "mips32 ejtag_all_quirk on",
             "-c", "mt7628.cpu0 configure -defer-examine",
             "-c", "init",
@@ -108,13 +93,42 @@ def main() -> None:
             "-c", "adapter deassert trst",
             "-c", "sleep 10",
             "-c", "mt7628.cpu0 arp_examine",
+
+            # SYS_RST is written over PRACC, so halt first.
+            "-c", "halt",
+            "-c", "wait_halt 2000",
+            # EJTAGBOOT: arm the TAP so the next reset traps at the reset vector.
+            "-c", "irscan mt7628.cpu 0x0c",
+            # RSTCTL.SYS_RST. Fails mid-access as the SoC resets - that is success.
+            "-c", "catch { mww 0xb0000034 0x1 }",
+            "-c", "shutdown",
         ]
-        if not args.no_halt:
-            argv += [
-                "-c", "halt",
-                "-c", "sleep 100",
-                "-c", "wait_halt 5000",
-            ]
+        rc = subprocess.run(reset_argv, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True)
+        for line in rc.stdout.splitlines():
+            print(f"{ts()} [reset] {line.rstrip()}", flush=True)
+        log(f"EJTAG reset    : pass 1/2 done (exit {rc.returncode})")
+
+    argv = list(common)
+
+    if board.hardware_reset:
+        argv += [
+            "-c", "init",
+            "-c", "reset halt",
+            "-c", "poll",
+            "-c", "halt",
+            "-c", "wait_halt 5000",
+        ]
+    else:
+        # Pass 2: attach to the core parked in dmseg; no TRST, no defer-examine.
+        argv += [
+            "-c", "mips32 ejtag_all_quirk on",
+            "-c", "init",
+            "-c", "poll",
+            "-c", "halt",
+            "-c", "wait_halt 5000",
+            "-c", "reg pc",
+        ]
 
     argv += [
         "-c", f"echo {READY_PATTERN}",
@@ -128,7 +142,7 @@ def main() -> None:
             print(f"{ts()} [OpenOCD] {line.rstrip()}", flush=True)
             if not startup_ok:
                 if READY_PATTERN in line:
-                    if errors_seen and not args.no_halt:
+                    if errors_seen:
                         proc.terminate()
                         try:
                             proc.wait(timeout=5)
@@ -136,10 +150,7 @@ def main() -> None:
                             proc.kill()
                         log("OpenOCD: failed")
                         sys.exit(1)
-                    if errors_seen:
-                        log(f"OpenOCD: ready, but {len(errors_seen)} error(s) logged above (--no-halt, staying up anyway)")
-                    else:
-                        log("OpenOCD: ready")
+                    log("OpenOCD: ready")
                     startup_ok = True
                 elif line.startswith("Error:"):
                     errors_seen.append(line.rstrip())

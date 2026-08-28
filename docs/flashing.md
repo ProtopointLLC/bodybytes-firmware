@@ -129,7 +129,7 @@ With U-Boot at its prompt, first run `scripts/flash_nor_images.py --bodybytes --
 | _Flash: U-Boot + env_ | `--u-boot --u-boot-env` |
 | _Flash: Erase NOR (full chip)_ | `--full-erase` |
 
-All three depend on _JTAG: Start OpenOCD J-Link_ for **both** transports. That is deliberate: the U-Boot shell YMODEM needs is itself established over JTAG by _JTAG: Boot U-Boot from RAM_, so OpenOCD is part of the flow either way. The transport only selects how the payload is staged once that shell exists — JTAG `load_image` versus U-Boot `loady`. `start_openocd_jlink.py` reuses an already-listening instance rather than failing on the port, so the prerequisite is a no-op when OpenOCD is already up.
+None of the three declares a dependency on _JTAG: Start OpenOCD J-Link_, because neither transport is satisfied by OpenOCD alone: both need a **U-Boot prompt**, which comes from _JTAG: Boot U-Boot from RAM_. `--ymodem` needs no OpenOCD at all, and `--jtag` needs both OpenOCD and that prompt. Establish the prompt first, then run the flash task. The transport only selects how the payload is staged once the shell exists — JTAG `load_image` versus U-Boot `loady`.
 
 Erase and flash are separate tasks because `--full-erase` is mutually exclusive with the partition flags; run the erase task first for a first-time install.
 
@@ -142,6 +142,8 @@ To re-flash individual partitions without a full chip erase, pass partition flag
 ### 4c-2 - Serial-only update over YMODEM (no JTAG)
 
 `--ymodem` stages the payload into DRAM with U-Boot's `loady` instead of a JTAG `load_image`, then writes NOR with the same `sf` commands and the same CRC verification. It needs **nothing but a U-Boot prompt on the serial port** — no OpenOCD, no J-Link. Ethernet is not wired on this board, so this is the only non-JTAG transport.
+
+**Prefer this for anything large.** On the TRST-only path JTAG staging runs at ~2.4 KiB/s (see [jtag.md](jtag.md)), so a multi-megabyte recovery image takes over an hour over `--jtag` and minutes over `--ymodem`. Use JTAG to get U-Boot into DRAM, then YMODEM for the payload.
 
 ```
 scripts/flash_nor_images.py --bodybytes --ymodem --recovery

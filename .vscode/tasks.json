@@ -124,10 +124,8 @@
         },
         {
             "label": "Flash: NOR (all partitions)",
-            "detail": "Erases and writes every partition. Requires --mac for the factory blob.",
             "type": "shell",
             "command": "nix develop .#uboot --command python3 scripts/flash_nor_images.py --${input:transport} --all --${input:board} --mac ${input:mac}",
-            "dependsOn": "JTAG: Start OpenOCD J-Link",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",
@@ -141,10 +139,8 @@
         },
         {
             "label": "Flash: U-Boot + env",
-            "detail": "Writes u-boot-with-spl.bin and the U-Boot environment only.",
             "type": "shell",
             "command": "nix develop .#uboot --command python3 scripts/flash_nor_images.py --${input:transport} --u-boot --u-boot-env --${input:board} --mac ${input:mac}",
-            "dependsOn": "JTAG: Start OpenOCD J-Link",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",
@@ -158,10 +154,8 @@
         },
         {
             "label": "Flash: Erase NOR (full chip)",
-            "detail": "Erases the entire SPI NOR. Destructive - the board will not boot until reflashed.",
             "type": "shell",
             "command": "nix develop .#uboot --command python3 scripts/flash_nor_images.py --${input:transport} --${input:board} --full-erase",
-            "dependsOn": "JTAG: Start OpenOCD J-Link",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",

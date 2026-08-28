@@ -25,7 +25,10 @@ class UBoot:
                 if self.PROMPT in buf:
                     return
             time.sleep(0.05)
-        raise TimeoutError(f"U-Boot: autoboot interrupt timed out after {timeout:.0f}s")
+        seen = buf.decode("utf-8", "replace").strip() if buf else "(nothing received)"
+        raise TimeoutError(
+            f"U-Boot: autoboot interrupt timed out after {timeout:.0f}s; "
+            f"UART said: {seen!r}")
 
     def sync(self, timeout: float = 5.0) -> bool:
         """Send a blank line and confirm the => prompt appears."""
