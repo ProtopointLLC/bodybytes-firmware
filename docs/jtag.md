@@ -68,19 +68,25 @@ Why the workaround is needed, the per-profile attach sequences, and how to chang
 
 Reference: <https://kb.segger.com/9-pin_JTAG/SWD_connector>
 
-| Board pos | Wire   | Test point | JTAG signal | SWD silkscreen | J-Link pin |
-|-----------|--------|------------|-------------|----------------|------------|
-| 1 (top)   | Red    | TP21       | VTref       | VTref          | 1          |
-| 2         | Orange | TP22       | GND         | GND            | 3 or 5     |
-| 3         | Yellow | TP18       | JTRST\_N    | nTRST          | 9          |
-| 4         | Green  | TP17       | TCK         | SWCLK          | 4          |
-| 5         | Blue   | TP16       | TMS         | SWDIO          | 2          |
-| 6         | Violet | TP15       | TDI         | NC             | 8          |
-| 7 (bot)   | White  | TP14       | TDO         | SWO            | 6          |
+| Board pos | Wire   | Test point | Board net   | J-Link pin | J-Link JTAG | J-Link SWD |
+|-----------|--------|------------|-------------|------------|-------------|------------|
+| 1 (top)   | Red    | TP21       | `3.3VDC`    | 1          | VTref       | VTref      |
+| 2         | Orange | TP22       | `GND`       | 3 or 5     | GND         | GND        |
+| 3         | Yellow | TP18       | `JTAG_RST_N`| 9 †        | nTRST       | nTRST      |
+| 4         | Green  | TP17       | `JTAG_CLK`  | 4          | TCK         | SWCLK      |
+| 5         | Blue   | TP16       | `JTAG_TMS`  | 2          | TMS         | SWDIO      |
+| 6         | Violet | TP15       | `JTAG_TDI`  | 8          | TDI         | NC         |
+| 7 (bot)   | White  | TP14       | `JTAG_TDO`  | 6          | TDO         | SWO        |
 
-J-Link pin 10 (nRESET) is not connected — bodybytes does not expose PORST\_N on the JTAG header.
+**† Pin 9 is TRST, but SEGGER's pinout marks it `NC(TRST)`.** That page also mentions a solder bridge named NR1 for connecting TRST - that bridge is on SEGGER's separate Cortex-M Adapter accessory and has nothing to do with wiring straight off the J-Link EDU Mini, which is what this table describes. Either way nothing in this workflow depends on TRST being asserted: the SoC is reset over JTAG by EJTAGBOOT plus `RSTCTL.SYS_RST` (see [§Resetting without a reset line](#resetting-without-a-reset-line)), which needs no reset line at all.
 
-VTref (TP21) is a sense input — connect it to the 3.3 V rail but do not use it to power the board.
+There is no pin 7 on this connector: the 9-pin layout is the 10-pin Cortex-M one with position 7 removed, so pin numbering runs 1-6, 8, 9, 10.
+
+J-Link pin 10 (nRESET) is not connected - bodybytes does not expose PORST\_N on the JTAG header.
+
+VTref (TP21) is a sense input - connect it to the 3.3 V rail but do not use it to power the board.
+
+Board-side mappings are from [`Bodybytes_v1.0[SCH].PDF`](bodybytes-hardware/PCB%20Design/Bodybytes_v1.0%5BSCH%5D.PDF): TP14-TP18 land on MT7628 pins 143, 142, 141, 140 and 139 (`EPHY_LED0_N_JTDO` through `EPHY_LED4_N_JTRST_N`); TP21 is on the 3.3 V rail and TP22 on GND, both by U6 on the power sheet.
 
 The JTAG pins are multiplexed with Ethernet LED functions; the board must be strapped for JTAG mode before connecting (see [§JTAG and SD/eMMC](#jtag-and-sdemmc-are-mutually-exclusive)).
 
@@ -88,11 +94,11 @@ The JTAG pins are multiplexed with Ethernet LED functions; the board must be str
 
 Only JTRST\_N is connected to the JTAG header on bodybytes. PORST\_N (system reset) is not wired to the JTAG connector.
 
-| Signal | Board net | J-Link pin | What it resets |
-|--------|-----------|------------|----------------|
-| TRST (nTRST) | `JTAG_TRST` / `JTRST_N` | 9 | JTAG/EJTAG TAP and debug logic only |
+| Signal | Board net | MT7628 pin | J-Link pin | What it resets |
+|--------|-----------|------------|------------|----------------|
+| TRST (nTRST) | `JTAG_RST_N` | 139 (`EPHY_LED4_N_JTRST_N`) | 9 | JTAG/EJTAG TAP and debug logic only |
 
-TRST resets only the TAP — not the CPU or peripherals. Without PORST\_N, connect after power-on and use `halt` to stop the CPU.
+TRST resets only the TAP - not the CPU or peripherals. Without PORST\_N, connect after power-on and use `halt` to stop the CPU. Resetting the SoC does not go through this line anyway; see [§Resetting without a reset line](#resetting-without-a-reset-line).
 
 ```tcl
 reset_config trst_only
