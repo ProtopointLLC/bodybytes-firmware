@@ -1,6 +1,6 @@
 # U-Boot - MT7628AN
 
-Source tree: `u-boot/` submodule (tag `v2026.04`) - see [building.md](building.md) for build steps.
+Source tree: `u-boot/` submodule (tag `v2026.07`) - see [building.md](building.md) for build steps.
 
 ## Board files
 

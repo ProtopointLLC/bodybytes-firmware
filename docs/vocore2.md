@@ -200,7 +200,7 @@ Follow the same wipe, partition, and format steps as [flashing.md §5b](flashing
 Then install the firmware directly from `sysupgrade.bin`:
 
 ```sh
-SYSUPGRADE=openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.4-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
+SYSUPGRADE=openwrt/bin/targets/ramips/mt76x8/openwrt-25.12.5-ramips-mt76x8-bodybytes_bodybytes-squashfs-sysupgrade.bin
 tar xf "$SYSUPGRADE" -O 'sysupgrade-bodybytes,bodybytes/kernel' | dd of=/dev/sdX1 bs=4M conv=fsync
 tar xf "$SYSUPGRADE" -O 'sysupgrade-bodybytes,bodybytes/root'   | dd of=/dev/sdX2 bs=4M conv=fsync
 sync

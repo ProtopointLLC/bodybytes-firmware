@@ -6,8 +6,8 @@ Development environment for the bodybytes implantable WiFi router - MT7628AN SoC
 
 | Path | Contents |
 |------|----------|
-| `u-boot/` | U-Boot `v2026.04`, branch `bodybytes` - board support for MT7628AN |
-| `openwrt/` | OpenWRT `v25.12.4`, branch `bodybytes` - board target and DTS for bodybytes |
+| `u-boot/` | U-Boot `v2026.07`, branch `bodybytes` - board support for MT7628AN |
+| `openwrt/` | OpenWRT `v25.12.5`, branch `bodybytes` - board target and DTS for bodybytes |
 
 The MT7628 OpenOCD target scripts (`mt7628.cfg`, `mmio.tcl`, `memc.tcl`) in `openocd/` are vendored from [mtk-openwrt/openocd-scripts](https://github.com/mtk-openwrt/openocd-scripts) and patched to comply with recent OpenOCD versions.
 

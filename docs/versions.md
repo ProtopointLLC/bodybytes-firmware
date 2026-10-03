@@ -6,11 +6,11 @@ Bodybytes depends on a handful of pinned upstream trees - some forked with bodyb
 
 | Component | Repo | Branch | Pinned via | Current pin | Pinned on |
 |-----------|------|--------|------------|-------------|-----------|
-| OpenWrt | [`ProtopointLLC/bodybytes-openwrt`](https://github.com/ProtopointLLC/bodybytes-openwrt) | `bodybytes` | `.gitmodules` + commit recorded in this repo's git tree (`git submodule status`) | upstream tag [`v25.12.4`](https://github.com/openwrt/openwrt/releases/tag/v25.12.4) | 2026-05-14 |
-| U-Boot | [`ProtopointLLC/bodybytes-u-boot`](https://github.com/ProtopointLLC/bodybytes-u-boot) | `bodybytes` | `.gitmodules` + commit recorded in this repo's git tree | upstream tag [`v2026.04`](https://source.denx.de/u-boot/u-boot/-/tags/v2026.04) | 2026-04-06 |
-| `bodybytes-packages` | [`ProtopointLLC/bodybytes-packages`](https://github.com/ProtopointLLC/bodybytes-packages) | `bodybytes` | `src-git` pin in [`openwrt/feeds.conf.default`](../openwrt/feeds.conf.default) | commit `84b68e2b5` (forked from upstream `openwrt-25.12` @ `f91b06b3f`) | 2026-05-13 |
-| `bodybytes-luci` | [`ProtopointLLC/bodybytes-luci`](https://github.com/ProtopointLLC/bodybytes-luci) | `bodybytes` | `src-git` pin in [`openwrt/feeds.conf.default`](../openwrt/feeds.conf.default) | commit `e4c4a79c6` (forked from upstream `openwrt-25.12` @ `e9ebca759`) | 2026-05-13 |
-| `immortalwrt_luci` | [`immortalwrt/luci`](https://github.com/immortalwrt/luci) (upstream, no bodybytes fork) | `openwrt-25.12` | `src-git` pin in [`openwrt/feeds.conf.default`](../openwrt/feeds.conf.default) | commit `c48d3f0f2` | 2026-05-16 |
+| OpenWrt | [`ProtopointLLC/bodybytes-openwrt`](https://github.com/ProtopointLLC/bodybytes-openwrt) | `bodybytes` | `.gitmodules` + commit recorded in this repo's git tree (`git submodule status`) | upstream tag [`v25.12.5`](https://github.com/openwrt/openwrt/releases/tag/v25.12.5) | 2026-10-03 |
+| U-Boot | [`ProtopointLLC/bodybytes-u-boot`](https://github.com/ProtopointLLC/bodybytes-u-boot) | `bodybytes` | `.gitmodules` + commit recorded in this repo's git tree | upstream tag [`v2026.07`](https://source.denx.de/u-boot/u-boot/-/tags/v2026.07) | 2026-10-03 |
+| `bodybytes-packages` | [`ProtopointLLC/bodybytes-packages`](https://github.com/ProtopointLLC/bodybytes-packages) | `bodybytes` | `src-git` pin in [`openwrt/feeds.conf.default`](../openwrt/feeds.conf.default) | commit `3c997e16d` (rebased onto upstream `openwrt-25.12` @ `5caa62e0b`) | 2026-10-03 |
+| `bodybytes-luci` | [`ProtopointLLC/bodybytes-luci`](https://github.com/ProtopointLLC/bodybytes-luci) | `bodybytes` | `src-git` pin in [`openwrt/feeds.conf.default`](../openwrt/feeds.conf.default) | commit `062e9675e` (rebased onto upstream `openwrt-25.12` @ `128a7812f`) | 2026-10-03 |
+| `immortalwrt_luci` | [`immortalwrt/luci`](https://github.com/immortalwrt/luci) (upstream, no bodybytes fork) | `openwrt-25.12` | `src-git` pin in [`openwrt/feeds.conf.default`](../openwrt/feeds.conf.default) | commit `0439e06df` | 2026-10-03 |
 
 Each fork carries a small, specific diff on top of its pin:
 
