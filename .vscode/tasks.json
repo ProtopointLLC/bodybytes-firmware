@@ -81,7 +81,7 @@
         {
             "label": "Serial Monitor",
             "type": "shell",
-            "command": "nix develop .#uboot --command picocom -b 921600 --flow n /dev/ttyUSB0",
+            "command": "nix develop .#uboot --command picocom -b 115200 --flow n /dev/ttyUSB0",
             "isBackground": true,
             "problemMatcher": [],
             "presentation": {

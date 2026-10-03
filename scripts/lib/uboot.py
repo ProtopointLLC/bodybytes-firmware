@@ -44,6 +44,28 @@ class UBoot:
         self._ser.write(command.encode() + b"\n")
         return self._read_until_prompt(timeout=timeout, on_line=on_line)
 
+    def set_baud(self, baud: int, timeout: float = 5.0) -> None:
+        """
+        Switch U-Boot's console baud rate live via `setenv baudrate`, then
+        follow it on this end. Typed at a live `=> ` prompt, this always
+        takes the *interactive* path in drivers/serial/serial.c - U-Boot
+        can't tell this script apart from a human - which prints "press
+        ENTER ..." and then genuinely blocks in `getchar() == '\\r'` at the
+        new rate before it prints "=> " again. So after reprogramming our
+        own end, send a bare CR (not sync()'s '\\n') to satisfy that wait.
+        """
+        if self._ser.baudrate == baud:
+            return
+        self._ser.write(f"setenv baudrate {baud}\n".encode())
+        self._ser.flush()  # tcdrain(): block until sent at the OLD baud
+        time.sleep(0.1)    # let U-Boot's env callback (udelay(50000)) land
+        self._ser.baudrate = baud
+        self._ser.reset_input_buffer()
+        self._ser.write(b"\r")  # satisfy the "press ENTER" wait at the NEW baud
+        self._ser.flush()
+        if not self.sync(timeout=timeout):
+            raise TimeoutError(f"U-Boot: no prompt at {baud} baud after switching")
+
     def loady(self, addr: int, data: bytes, name: str = "image.bin",
               progress: Callable[[int, int], None] | None = None,
               timeout: float = 30.0) -> str:

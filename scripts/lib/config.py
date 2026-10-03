@@ -21,9 +21,10 @@ def _s(section: str, key: str) -> str:
 OPENOCD_HOST = _s("openocd", "host")
 OPENOCD_PORT = _x("openocd", "port")
 
-SERIAL_PORT    = _s("serial", "port")
-SERIAL_BAUD    = _x("serial", "baud")
-SERIAL_TIMEOUT = int(_ini["serial"]["timeout_min"]) * 60
+SERIAL_PORT        = _s("serial", "port")
+SERIAL_BAUD        = _x("serial", "baud")
+SERIAL_YMODEM_BAUD = _x("serial", "ymodem_baud")
+SERIAL_TIMEOUT     = int(_ini["serial"]["timeout_min"]) * 60
 
 UBOOT_RAM_ADDR = _x("jtag", "uboot_ram_addr")
 CHIP_ID_ADDR   = _x("jtag", "chip_id_addr")

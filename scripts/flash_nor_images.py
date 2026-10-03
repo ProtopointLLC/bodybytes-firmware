@@ -6,8 +6,10 @@ Flash NOR partitions to bodybytes.
 --ymodem: stage over YMODEM into RAM using a running U-Boot shell, then
   write with the same sf commands. Needs no JTAG at all - serial only.
   Ethernet is not available on this board, so this is the only non-JTAG
-  transport. Console must already be at the rate in config.ini ([serial]
-  baud), which is the single place that rate is configured.
+  transport. Console starts at config.ini ([serial] baud) and switches up
+  to [serial] ymodem_baud via `setenv baudrate` for the transfer only, then
+  back down - U-Boot's default stays low so it matches the Linux console
+  it hands off to (see UBoot.set_baud).
 --file: assemble a NOR image to build/ instead (implies --all).
   --minimal trims it after the last partition's actual data, for use with
   --jtag --image instead of flashrom (not flashrom-writable otherwise).
@@ -45,7 +47,7 @@ from lib.ymodem import YmodemError
 from lib.log import log, err, oc as _oc, ub as _ub
 from lib.config import (
     OPENOCD_HOST, OPENOCD_PORT,
-    SERIAL_PORT, SERIAL_BAUD,
+    SERIAL_PORT, SERIAL_BAUD, SERIAL_YMODEM_BAUD,
     STAGING_ADDR, NOR_SECTOR_SIZE, NOR_FLASHROM_PROG,
     UBOOT_BIN, UBOOT_ENV_TXT, UBOOT_DEFCONFIG, MKENVIMAGE,
     RECOVERY_BIN, NOR_IMAGE,
@@ -249,7 +251,13 @@ def _flash_jtag(openocd: OpenOCD, uboot: UBoot,
 
 def _flash_ymodem(uboot: UBoot, label: str, data: bytes, flash_offset: int) -> None:
     log(f"Flashing '{label}': {len(data):#x} bytes at NOR offset {flash_offset:#x}")
-    _stage_ymodem(uboot, label, data)
+    log(f"Switching console to {SERIAL_YMODEM_BAUD} baud for the transfer")
+    uboot.set_baud(SERIAL_YMODEM_BAUD)
+    try:
+        _stage_ymodem(uboot, label, data)
+    finally:
+        log(f"Switching console back to {SERIAL_BAUD} baud")
+        uboot.set_baud(SERIAL_BAUD)
     _program_nor(uboot, label, data, flash_offset)
 
 
